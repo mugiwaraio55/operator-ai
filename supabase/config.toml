@@ -1,0 +1,10 @@
+project_id = "operator-ai"
+
+[functions.integration-oauth]
+verify_jwt = false
+
+[functions.sync-dashboard]
+verify_jwt = true
+
+[functions.assistant-run]
+verify_jwt = true
