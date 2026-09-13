@@ -7,8 +7,9 @@ import {
 import { ensureSalesWorkspace, gradeTranscript } from "../_shared/sales.ts";
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS")
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
   const { user } = await authorizeUser(req);
   if (!user) return json({ error: "Sign in is required." }, 401);
@@ -18,6 +19,7 @@ Deno.serve(async (req) => {
     gradingId?: number;
     transcript?: string;
     title?: string;
+    repName?: string;
   };
   let gradingId = Number(body.gradingId ?? 0);
   let transcript = String(body.transcript ?? "").trim();
@@ -31,17 +33,19 @@ Deno.serve(async (req) => {
     if (!data) return json({ error: "Call grading was not found." }, 404);
     transcript = data.transcript ?? transcript;
   } else {
-    if (transcript.length < 20)
+    if (transcript.length < 20) {
       return json(
         { error: "A transcript of at least 20 characters is required." },
         400,
       );
+    }
     const { data, error } = await admin
       .from("sales_call_gradings")
       .insert({
         user_id: user.id,
         provider: "manual",
         title: String(body.title ?? "Manual call"),
+        rep_name: String(body.repName ?? "").trim().slice(0, 160) || null,
         transcript,
         status: "pending",
       })
@@ -50,8 +54,9 @@ Deno.serve(async (req) => {
     if (error) return json({ error: error.message }, 500);
     gradingId = data.id;
   }
-  if (transcript.length < 20)
+  if (transcript.length < 20) {
     return json({ error: "This call has no usable transcript." }, 409);
+  }
   const grade = await gradeTranscript(admin, user.id, transcript);
   const { error } = await admin
     .from("sales_call_gradings")

@@ -35,6 +35,12 @@ create table if not exists public.sales_manager_settings (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.sales_manager_settings add column if not exists briefing_send_time time not null default '07:00';
+alter table public.sales_manager_settings add column if not exists leads_digest_send_time time not null default '16:30';
+alter table public.sales_manager_settings add column if not exists morale_send_time time not null default '17:00';
+alter table public.sales_manager_settings add column if not exists coaching_send_time time not null default '16:00';
+alter table public.sales_manager_settings add column if not exists eod_enforce_delay_minutes integer not null default 30
+  check (eod_enforce_delay_minutes between 0 and 720);
 
 create table if not exists public.charles_account_members (
   member_user_id uuid primary key references auth.users(id) on delete cascade,

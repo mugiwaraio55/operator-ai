@@ -13,8 +13,9 @@ export async function ensureSalesWorkspace(
     .eq("member_user_id", userId)
     .maybeSingle();
   if (existing) {
-    if (!existing.is_active)
+    if (!existing.is_active) {
       throw new Error("Your Sales Manager team access is inactive.");
+    }
     return existing as {
       owner_user_id: string;
       role: "owner" | "sales_rep";
@@ -85,8 +86,9 @@ export async function ghlFetch(
   query?: Record<string, string | number | boolean | undefined>,
 ) {
   const url = new URL(`https://services.leadconnectorhq.com${path}`);
-  for (const [key, value] of Object.entries(query ?? {}))
+  for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, String(value));
+  }
   const response = await fetch(url, {
     headers: {
       Authorization: `Bearer ${pit}`,
@@ -95,8 +97,9 @@ export async function ghlFetch(
     },
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok)
+  if (!response.ok) {
     throw new Error(`GoHighLevel request failed (${response.status}).`);
+  }
   return payload as Record<string, unknown>;
 }
 
@@ -118,15 +121,15 @@ export async function createClickUpTask(
     .eq("user_id", ownerId)
     .eq("provider", "clickup")
     .maybeSingle();
-  const listId =
-    typeof connection?.metadata?.list_id === "string"
-      ? connection.metadata.list_id
-      : "";
-  if (!token || !listId)
+  const listId = typeof connection?.metadata?.list_id === "string"
+    ? connection.metadata.list_id
+    : "";
+  if (!token || !listId) {
     return {
       ok: false,
       error: "Connect ClickUp and select a destination List first.",
     };
+  }
   const response = await fetch(
     `https://api.clickup.com/api/v2/list/${encodeURIComponent(listId)}/task`,
     {
@@ -161,8 +164,8 @@ export async function createClickUpTask(
 
 export async function webhookOwner(req: Request, admin: AdminClient) {
   const url = new URL(req.url);
-  const token =
-    url.searchParams.get("token") ?? req.headers.get("x-webhook-token");
+  const token = url.searchParams.get("token") ??
+    req.headers.get("x-webhook-token");
   if (token && token.length >= 32) {
     const { data } = await admin
       .from("sales_webhook_tokens")
@@ -178,8 +181,9 @@ export async function webhookOwner(req: Request, admin: AdminClient) {
     requestedUser &&
     req.headers.get("x-webhook-secret") === shared &&
     /^[0-9a-f-]{36}$/i.test(requestedUser)
-  )
+  ) {
     return requestedUser;
+  }
   return null;
 }
 
@@ -199,8 +203,9 @@ export async function verifyFathomSignature(
     !messageId ||
     !Number.isFinite(seconds) ||
     Math.abs(Date.now() / 1000 - seconds) > 300
-  )
+  ) {
     return false;
+  }
   try {
     const rawKey = secret
       .replace(/^whsec_/, "")
@@ -210,8 +215,9 @@ export async function verifyFathomSignature(
       rawKey.length + ((4 - (rawKey.length % 4)) % 4),
       "=",
     );
-    const keyBytes = Uint8Array.from(atob(encodedKey), (character) =>
-      character.charCodeAt(0),
+    const keyBytes = Uint8Array.from(
+      atob(encodedKey),
+      (character) => character.charCodeAt(0),
     );
     const key = await crypto.subtle.importKey(
       "raw",
@@ -240,8 +246,9 @@ export async function verifyFathomSignature(
 function constantTimeEqual(left: string, right: string) {
   if (left.length !== right.length) return false;
   let mismatch = 0;
-  for (let index = 0; index < left.length; index++)
+  for (let index = 0; index < left.length; index++) {
     mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
   return mismatch === 0;
 }
 
@@ -251,7 +258,19 @@ export async function gradeTranscript(
   transcript: string,
 ) {
   const fallback = deterministicGrade(transcript);
-  const { secret } = await integrationSecret(admin, userId, "ai");
+  const { ownerId, secret } = await integrationSecret(admin, userId, "ai");
+  const [{ data: settings }, { data: documents }] = await Promise.all([
+    admin
+      .from("sales_manager_settings")
+      .select("instructions,soul")
+      .eq("user_id", ownerId)
+      .maybeSingle(),
+    admin
+      .from("sales_os_documents")
+      .select("slug,title,body_md")
+      .eq("user_id", ownerId)
+      .in("slug", ["sales-process", "offer", "industry-knowledge"]),
+  ]);
   let config: { provider?: string; apiKey?: string; model?: string } = {};
   try {
     if (secret) config = JSON.parse(secret);
@@ -259,18 +278,37 @@ export async function gradeTranscript(
     /* use project fallback */
   }
   const provider = config.provider ?? "openai";
-  const apiKey =
-    config.apiKey ??
+  const apiKey = config.apiKey ??
     (provider === "openai"
       ? Deno.env.get("OPENAI_API_KEY")
       : Deno.env.get("GLM_API_KEY"));
   if (!apiKey) return { ...fallback, model: null };
   try {
-    const instruction =
-      "Grade this sales call. Return only JSON with overall_score 0-100, script_adherence_pct 0-100, category_scores object, strengths string array, improvements string array, and coaching_notes string. Use only the transcript.";
+    const operatingContext = [
+      settings?.instructions
+        ? `Manager instructions:\n${settings.instructions}`
+        : "",
+      settings?.soul
+        ? `Charles personality and standards:\n${settings.soul}`
+        : "",
+      ...(documents ?? []).map(
+        (document) =>
+          `${document.title ?? document.slug}:\n${document.body_md ?? ""}`,
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .slice(0, 18000);
+    const instruction = [
+      "Grade this sales call against the supplied sales operating context.",
+      "Use only the transcript for claims about what happened on the call; use the context as the rubric.",
+      "Return only JSON with overall_score 0-100, script_adherence_pct 0-100, category_scores object, strengths string array, improvements string array, and coaching_notes string.",
+      operatingContext ? `Sales operating context:\n${operatingContext}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     let text = "";
-    const model =
-      config.model ??
+    const model = config.model ??
       (provider === "glm"
         ? "glm-4.5-flash"
         : (Deno.env.get("OPENAI_MODEL") ?? "gpt-5-mini"));
@@ -329,10 +367,9 @@ export async function gradeTranscript(
           : fallback.category_scores,
       strengths: stringArray(parsed.strengths, fallback.strengths),
       improvements: stringArray(parsed.improvements, fallback.improvements),
-      coaching_notes:
-        typeof parsed.coaching_notes === "string"
-          ? parsed.coaching_notes.slice(0, 5000)
-          : fallback.coaching_notes,
+      coaching_notes: typeof parsed.coaching_notes === "string"
+        ? parsed.coaching_notes.slice(0, 5000)
+        : fallback.coaching_notes,
       model,
     };
   } catch {
@@ -369,8 +406,9 @@ function deterministicGrade(transcript: string) {
     script_adherence_pct: Math.min(95, score + 3),
     category_scores: {
       discovery: lower.includes("problem") ? 82 : 60,
-      qualification:
-        lower.includes("budget") || lower.includes("decision") ? 80 : 58,
+      qualification: lower.includes("budget") || lower.includes("decision")
+        ? 80
+        : 58,
       next_steps: lower.includes("next step") ? 86 : 55,
     },
     strengths: signals.length

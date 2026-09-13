@@ -38,10 +38,10 @@ revoke all on function private.run_charles_autopilot(text) from public, anon, au
 
 select cron.schedule('charles-scan', '*/5 * * * *', $$select private.run_charles_autopilot('scan');$$);
 select cron.schedule('charles-crm', '*/15 * * * *', $$select private.run_charles_autopilot('crm');$$);
-select cron.schedule('charles-morale', '0 23 * * *', $$select private.run_charles_autopilot('morale');$$);
-select cron.schedule('charles-dropball', '0 14 * * *', $$select private.run_charles_autopilot('dropball');$$);
-select cron.schedule('charles-leadsdigest', '0 22 * * *', $$select private.run_charles_autopilot('leadsdigest');$$);
-select cron.schedule('charles-briefing', '0 12 * * 1-5', $$select private.run_charles_autopilot('briefing');$$);
-select cron.schedule('charles-eod', '*/20 21-23 * * 1-5', $$select private.run_charles_autopilot('eodEnforce');$$);
-select cron.schedule('charles-eod-link', '*/15 18-23,0-2 * * 1-5', $$select private.run_charles_autopilot('eodLink');$$);
-select cron.schedule('charles-coaching', '0 21 * * 5', $$select private.run_charles_autopilot('coaching');$$);
+select cron.schedule('charles-morale', '*/15 * * * 1-5', $$select private.run_charles_autopilot('morale');$$);
+select cron.schedule('charles-dropball', '*/15 * * * 1-5', $$select private.run_charles_autopilot('dropball');$$);
+select cron.schedule('charles-leadsdigest', '*/15 * * * 1-5', $$select private.run_charles_autopilot('leadsdigest');$$);
+select cron.schedule('charles-briefing', '*/15 * * * 1-5', $$select private.run_charles_autopilot('briefing');$$);
+select cron.schedule('charles-eod', '*/20 * * * 1-5', $$select private.run_charles_autopilot('eodEnforce');$$);
+select cron.schedule('charles-eod-link', '*/15 * * * 1-5', $$select private.run_charles_autopilot('eodLink');$$);
+select cron.schedule('charles-coaching', '*/30 * * 5', $$select private.run_charles_autopilot('coaching');$$);

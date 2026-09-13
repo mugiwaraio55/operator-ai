@@ -25,6 +25,7 @@ import {
   Sparkles,
   Target,
   TrendingUp,
+  Trophy,
   UserRoundCheck,
   Users,
   WandSparkles,
@@ -42,6 +43,10 @@ import {
 } from "./demoData";
 import { SalesManagerModule, type SalesModule } from "./SalesManagerModules";
 import { MediaBuyerModule, type MediaModule } from "./MediaBuyerModules";
+import {
+  SalesWorkspaceModules,
+  type SalesWorkspaceModule,
+} from "./SalesWorkspaceModules";
 
 type Workspace = "sales" | "media";
 type View =
@@ -50,12 +55,38 @@ type View =
   | "pipeline"
   | "charles"
   | "team"
+  | "responsibilities"
+  | "instructions"
+  | "process"
+  | "offer"
+  | "call-reporting"
+  | "call-grading"
+  | "eod-report"
+  | "eod-dashboard"
+  | "appointments"
+  | "knowledge"
   | "media-tools"
   | "media-structure"
   | "media-history"
   | "integrations";
 type Modal = "ask" | "call" | "eod" | "tool" | null;
 type ToolKey = "audit" | "spy" | "script" | "draft";
+
+const salesFunctionTabs: { label: string; view: View }[] = [
+  { label: "Chat with Charles", view: "charles" },
+  { label: "Responsibilities", view: "responsibilities" },
+  { label: "Instructions & Soul", view: "instructions" },
+  { label: "GHL Data", view: "pipeline" },
+  { label: "Sales Process", view: "process" },
+  { label: "The Offer", view: "offer" },
+  { label: "Call Reporting", view: "call-reporting" },
+  { label: "Call Grading", view: "call-grading" },
+  { label: "EOD Report", view: "eod-report" },
+  { label: "EOD Dashboard / Leaderboard", view: "eod-dashboard" },
+  { label: "Appointments", view: "appointments" },
+  { label: "Industry Knowledge", view: "knowledge" },
+  { label: "Integrations", view: "integrations" },
+];
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -485,18 +516,16 @@ export function AppShell() {
     };
     if (isDemo) setCalls((current) => [next, ...current]);
     else if (supabase && session) {
-      const { error } = await supabase
-        .from("sales_calls")
-        .insert({
-          user_id: session.user.id,
-          prospect_name: next.prospect_name,
-          rep_name: next.rep_name,
-          outcome: next.outcome,
-          score: next.score,
-          revenue: next.revenue,
-          primary_objection: next.primary_objection,
-          happened_at: next.happened_at,
-        });
+      const { error } = await supabase.from("sales_calls").insert({
+        user_id: session.user.id,
+        prospect_name: next.prospect_name,
+        rep_name: next.rep_name,
+        outcome: next.outcome,
+        score: next.score,
+        revenue: next.revenue,
+        primary_objection: next.primary_objection,
+        happened_at: next.happened_at,
+      });
       if (error) {
         setNotice(error.message);
         return;
@@ -511,21 +540,19 @@ export function AppShell() {
     event.preventDefault();
     const values = Object.fromEntries(new FormData(event.currentTarget));
     if (!isDemo && supabase && session) {
-      const { error } = await supabase
-        .from("sales_eod_reports")
-        .upsert(
-          {
-            user_id: session.user.id,
-            report_date: new Date().toISOString().slice(0, 10),
-            wins: values.wins,
-            blockers: values.blockers,
-            priorities: values.priorities,
-            calls_taken: Number(values.calls_taken),
-            closes: Number(values.closes),
-            revenue: Number(values.revenue),
-          },
-          { onConflict: "user_id,report_date" },
-        );
+      const { error } = await supabase.from("sales_eod_reports").upsert(
+        {
+          user_id: session.user.id,
+          report_date: new Date().toISOString().slice(0, 10),
+          wins: values.wins,
+          blockers: values.blockers,
+          priorities: values.priorities,
+          calls_taken: Number(values.calls_taken),
+          closes: Number(values.closes),
+          revenue: Number(values.revenue),
+        },
+        { onConflict: "user_id,report_date" },
+      );
       if (error) {
         setNotice(error.message);
         return;
@@ -626,6 +653,14 @@ export function AppShell() {
               <Users size={16} /> Team
             </button>
           )}
+          {workspace === "sales" && (
+            <button
+              className={view === "eod-dashboard" ? "active" : ""}
+              onClick={() => setView("eod-dashboard")}
+            >
+              <Trophy size={16} /> Leaderboard
+            </button>
+          )}
           {workspace === "media" && (
             <button
               className={view === "media-tools" ? "active" : ""}
@@ -717,7 +752,7 @@ export function AppShell() {
             </button>
           </div>
         </header>
-      {notice && (
+        {notice && (
           <div className="notice" role="status">
             <Check size={16} />
             <span>{notice}</span>
@@ -725,20 +760,101 @@ export function AppShell() {
               <X size={15} />
             </button>
           </div>
-      )}
-      <div className="content-wrap">
-        <nav className="mobile-view-nav" aria-label="Current workspace views">
-          <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>Overview</button>
-          <button className={view === "records" ? "active" : ""} onClick={() => setView("records")}>{workspace === "sales" ? "Calls" : "Campaigns"}</button>
-          {workspace === "sales" && <button className={view === "pipeline" ? "active" : ""} onClick={() => setView("pipeline")}>GHL & grading</button>}
-          {workspace === "sales" && <button className={view === "charles" ? "active" : ""} onClick={() => setView("charles")}>Charles</button>}
-          {workspace === "sales" && <button className={view === "team" ? "active" : ""} onClick={() => setView("team")}>Team</button>}
-          {workspace === "media" && <button className={view === "media-tools" ? "active" : ""} onClick={() => setView("media-tools")}>AI tools</button>}
-          {workspace === "media" && <button className={view === "media-structure" ? "active" : ""} onClick={() => setView("media-structure")}>Structure</button>}
-          {workspace === "media" && <button className={view === "media-history" ? "active" : ""} onClick={() => setView("media-history")}>History</button>}
-          <button className={view === "integrations" ? "active" : ""} onClick={() => setView("integrations")}>Integrations</button>
-        </nav>
-        {view === "overview" && (
+        )}
+        <div className="content-wrap">
+          <nav className="mobile-view-nav" aria-label="Current workspace views">
+            <button
+              className={view === "overview" ? "active" : ""}
+              onClick={() => setView("overview")}
+            >
+              Overview
+            </button>
+            <button
+              className={view === "records" ? "active" : ""}
+              onClick={() => setView("records")}
+            >
+              {workspace === "sales" ? "Calls" : "Campaigns"}
+            </button>
+            {workspace === "sales" && (
+              <button
+                className={view === "pipeline" ? "active" : ""}
+                onClick={() => setView("pipeline")}
+              >
+                GHL & grading
+              </button>
+            )}
+            {workspace === "sales" && (
+              <button
+                className={view === "charles" ? "active" : ""}
+                onClick={() => setView("charles")}
+              >
+                Charles
+              </button>
+            )}
+            {workspace === "sales" && (
+              <button
+                className={view === "team" ? "active" : ""}
+                onClick={() => setView("team")}
+              >
+                Team
+              </button>
+            )}
+            {workspace === "sales" && (
+              <button
+                className={view === "eod-dashboard" ? "active" : ""}
+                onClick={() => setView("eod-dashboard")}
+              >
+                Leaderboard
+              </button>
+            )}
+            {workspace === "media" && (
+              <button
+                className={view === "media-tools" ? "active" : ""}
+                onClick={() => setView("media-tools")}
+              >
+                AI tools
+              </button>
+            )}
+            {workspace === "media" && (
+              <button
+                className={view === "media-structure" ? "active" : ""}
+                onClick={() => setView("media-structure")}
+              >
+                Structure
+              </button>
+            )}
+            {workspace === "media" && (
+              <button
+                className={view === "media-history" ? "active" : ""}
+                onClick={() => setView("media-history")}
+              >
+                History
+              </button>
+            )}
+            <button
+              className={view === "integrations" ? "active" : ""}
+              onClick={() => setView("integrations")}
+            >
+              Integrations
+            </button>
+          </nav>
+          {workspace === "sales" && (
+            <nav
+              className="sales-function-nav"
+              aria-label="AI Sales Manager functions"
+            >
+              {salesFunctionTabs.map((tab) => (
+                <button
+                  key={tab.view}
+                  className={view === tab.view ? "active" : ""}
+                  onClick={() => setView(tab.view)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
+          )}
+          {view === "overview" && (
             <>
               <section className="hero-card">
                 <div className="hero-copy">
@@ -828,6 +944,24 @@ export function AppShell() {
             ["pipeline", "charles", "team"].includes(view) && (
               <SalesManagerModule
                 module={view as SalesModule}
+                isDemo={isDemo}
+              />
+            )}
+          {workspace === "sales" &&
+            [
+              "responsibilities",
+              "instructions",
+              "process",
+              "offer",
+              "call-reporting",
+              "call-grading",
+              "eod-report",
+              "eod-dashboard",
+              "appointments",
+              "knowledge",
+            ].includes(view) && (
+              <SalesWorkspaceModules
+                module={view as SalesWorkspaceModule}
                 isDemo={isDemo}
               />
             )}

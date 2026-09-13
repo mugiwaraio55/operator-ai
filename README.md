@@ -23,7 +23,6 @@ Open `http://localhost:3000`. Leave the placeholder Supabase values in place to 
 
 1. Create a Supabase project.
 2. In **SQL Editor**, run the files in this exact order:
-
    1. `supabase/schema.sql`
    2. `supabase/ai_sales_manager.sql`
    3. `supabase/ai_media_buyer.sql`
@@ -80,7 +79,6 @@ This app uses a location-level Private Integration Token (PIT), which is the sim
 
 1. In the intended HighLevel sub-account, open **Settings > Private Integrations** and create an integration named `Operator AI`.
 2. Give it only these read scopes:
-
    - `locations.readonly`
    - `calendars/events.readonly`
    - `opportunities.readonly`
@@ -129,6 +127,24 @@ GLM_API_KEY=...
 
 The Charles workspace keeps each user’s chat history and durable memories. Messages containing phrases such as “remember,” “my goal,” or “our process” become memory. Owners can set the account operating instructions, Charles personality, targets, timezone, CRM thresholds, and EOD timing.
 
+## AI Sales Manager functions
+
+The Sales Manager workspace includes every operating area from the original Charles screen:
+
+- **Chat with Charles** uses calls, appointments, opportunities, EOD reports, grading results, playbooks, and durable memory as context. Messages beginning with “remind me” or “remind us” create scheduled reminders for Autopilot delivery.
+- **Responsibilities** controls the master Charles Autopilot switch and each of its nine independent workflows: due-reminder scan, dropped-ball detection, CRM monitoring, lead digest, daily briefing, EOD link delivery, EOD enforcement, morale monitoring, and weekly coaching.
+- **Instructions & Soul** stores Charles’s operating instructions, personality, timezone, targets, CRM thresholds, EOD time, and ClickUp message template.
+- **GHL Data** syncs and displays appointments and pipeline opportunities from GoHighLevel.
+- **Sales Process**, **The Offer**, and **Industry Knowledge** are private editable operating documents that Charles uses as context.
+- **Call Reporting** combines EOD call activity, conversion movement, AI call quality, and CRM compliance into a seven-day team report.
+- **Call Grading** accepts manual transcripts and displays automatic Fathom/GHL grades, category scores, script adherence, strengths, improvements, and coaching notes.
+- **EOD Report** saves or edits the signed-in rep’s calls, connects, appointments, closes, revenue, mood, wins, blockers, priorities, support needs, and CRM completion.
+- **EOD Dashboard / Leaderboard** supports 24-hour, 7-day, 30-day, and 90-day views; category leaders; adjustable weighting; and rankings for closes, revenue, close rate, appointments, call quality, and CRM compliance.
+- **Appointments** syncs GoHighLevel and lets the record owner save booking status, sales outcome, revenue, summary, objections, follow-up time, and next steps.
+- **Integrations** configures ClickUp, GoHighLevel, Fathom, Meta, the AI provider, and tokenized webhook URLs.
+
+Owner-only data aggregation and rankings run in the `owner-dashboard` Edge Function. Provider credentials stay in Vault and browser tables remain protected by Row Level Security.
+
 ## Team, owner dashboard, and EOD links
 
 1. Sign in as the account owner and open **Team**.
@@ -151,9 +167,10 @@ After ClickUp and Charles settings are tested:
    ```
 
 2. Run `supabase/cron.sql` once.
-3. In Operator AI, open **AI Sales Manager > Integrations**, enable Autopilot, and enable the desired modes.
+3. In Operator AI, open **AI Sales Manager > Instructions & Soul** and set the account timezone plus the local delivery times for briefings, lead digests, EOD links, morale, and Friday coaching.
+4. Open **Responsibilities**, enable the desired modes, and then enable the master Charles Autopilot switch.
 
-The nine modes are `scan`, `dropball`, `crm`, `morale`, `leadsdigest`, `briefing`, `eodEnforce`, `eodLink`, and `coaching`. The scheduler calls a service-role-only endpoint; ordinary signed-in users cannot run account-wide jobs. Cron expressions in `supabase/cron.sql` use UTC, while EOD date/time decisions use each owner’s configured IANA timezone.
+The nine modes are `scan`, `dropball`, `crm`, `morale`, `leadsdigest`, `briefing`, `eodEnforce`, `eodLink`, and `coaching`. The scheduler calls a service-role-only endpoint; ordinary signed-in users cannot run account-wide jobs. Time-sensitive jobs poll throughout the day, but Charles evaluates each owner's configured IANA timezone and local delivery time before creating a deduplicated ClickUp task.
 
 ## Connect Facebook / Meta Ads Manager
 

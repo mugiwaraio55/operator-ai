@@ -18,18 +18,21 @@ const modes = new Set([
 ]);
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS")
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
   if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
-  if (!isServiceRequest(req))
+  if (!isServiceRequest(req)) {
     return json({ error: "Service-role authorization is required." }, 403);
+  }
   const body = (await req.json().catch(() => ({}))) as {
     mode?: string;
     ownerUserId?: string;
   };
   const mode = String(body.mode ?? "scan");
-  if (!modes.has(mode))
+  if (!modes.has(mode)) {
     return json({ error: "Unsupported autopilot mode." }, 400);
+  }
   const admin = adminClient();
   let query = admin
     .from("sales_manager_settings")
@@ -66,15 +69,42 @@ async function runMode(
   mode: string,
   settings: Record<string, unknown>,
 ) {
-  const today = businessDate(String(settings.timezone ?? "America/Chicago"));
+  const timeZone = String(settings.timezone ?? "America/Chicago");
+  const today = businessDate(timeZone);
+  if (
+    mode === "briefing" &&
+    !scheduleReached(timeZone, String(settings.briefing_send_time ?? "07:00"))
+  ) return { created: false, reason: "before_briefing_time" };
+  if (
+    mode === "leadsdigest" &&
+    !scheduleReached(
+      timeZone,
+      String(settings.leads_digest_send_time ?? "16:30"),
+    )
+  ) return { created: false, reason: "before_lead_digest_time" };
+  if (
+    mode === "morale" &&
+    !scheduleReached(timeZone, String(settings.morale_send_time ?? "17:00"))
+  ) return { created: false, reason: "before_morale_time" };
+  if (mode === "coaching") {
+    if (businessWeekday(timeZone) !== 5) {
+      return { created: false, reason: "not_local_friday" };
+    }
+    if (
+      !scheduleReached(
+        timeZone,
+        String(settings.coaching_send_time ?? "16:00"),
+      )
+    ) return { created: false, reason: "before_coaching_time" };
+  }
   if (mode === "scan") return scanReminders(admin, ownerId);
-  if (mode === "crm" || mode === "dropball" || mode === "leadsdigest")
+  if (mode === "crm" || mode === "dropball" || mode === "leadsdigest") {
     await refreshOpportunities(admin, ownerId);
+  }
   if (mode === "crm" || mode === "dropball") {
-    const thresholdMs =
-      mode === "dropball"
-        ? Number(settings.crm_wait_minutes ?? 15) * 60000
-        : Number(settings.crm_stuck_days ?? 7) * 86400000;
+    const thresholdMs = mode === "dropball"
+      ? Number(settings.crm_wait_minutes ?? 15) * 60000
+      : Number(settings.crm_stuck_days ?? 7) * 86400000;
     const cutoff = Date.now() - thresholdMs;
     const { data } = await admin
       .from("sales_opportunities")
@@ -90,7 +120,7 @@ async function runMode(
           Date.parse(String(item.last_activity_at ?? item.created_at)) < cutoff,
       )
       .slice(0, 50);
-    if (items.length)
+    if (items.length) {
       await admin.from("charles_crm_flags").upsert(
         items.map((item) => ({
           user_id: ownerId,
@@ -101,12 +131,16 @@ async function runMode(
         })),
         { onConflict: "user_id,item_key" },
       );
-    if (!items.length)
+    }
+    if (!items.length) {
       return { created: false, reason: "no_stuck_opportunities" };
+    }
     const lines = items
       .map(
         (item) =>
-          `- ${item.name} · $${Number(item.monetary_value).toFixed(0)} · last activity ${item.last_activity_at ?? "unknown"}`,
+          `- ${item.name} · $${
+            Number(item.monetary_value).toFixed(0)
+          } · last activity ${item.last_activity_at ?? "unknown"}`,
       )
       .join("\n");
     return deliverOnce(
@@ -115,7 +149,9 @@ async function runMode(
       mode,
       `${today}:${mode}`,
       mode === "crm" ? "Charles CRM exceptions" : "Charles dropped-ball review",
-      `## ${items.length ? items.length : 0} opportunities need action\n\n${lines}`,
+      `## ${
+        items.length ? items.length : 0
+      } opportunities need action\n\n${lines}`,
     );
   }
   if (mode === "leadsdigest") {
@@ -137,7 +173,9 @@ async function runMode(
       mode,
       today,
       "Charles daily lead digest",
-      `## New CRM opportunities\n\n- New opportunities: ${rows.length}\n- Pipeline value: $${value.toFixed(0)}\n- Open: ${rows.filter((row) => row.status === "open").length}`,
+      `## New CRM opportunities\n\n- New opportunities: ${rows.length}\n- Pipeline value: $${
+        value.toFixed(0)
+      }\n- Open: ${rows.filter((row) => row.status === "open").length}`,
     );
   }
   if (mode === "briefing") {
@@ -159,19 +197,19 @@ async function runMode(
         .order("monetary_value", { ascending: false })
         .limit(10),
     ]);
-    const appointmentLines =
-      (appts ?? [])
-        .map(
-          (row) =>
-            `- ${row.scheduled_at}: ${row.prospect_name ?? "Appointment"} (${row.status})`,
-        )
-        .join("\n") || "- No appointments synced";
-    const opportunityLines =
-      (opps ?? [])
-        .map(
-          (row) => `- ${row.name}: $${Number(row.monetary_value).toFixed(0)}`,
-        )
-        .join("\n") || "- No open opportunities synced";
+    const appointmentLines = (appts ?? [])
+      .map(
+        (row) =>
+          `- ${row.scheduled_at}: ${
+            row.prospect_name ?? "Appointment"
+          } (${row.status})`,
+      )
+      .join("\n") || "- No appointments synced";
+    const opportunityLines = (opps ?? [])
+      .map(
+        (row) => `- ${row.name}: $${Number(row.monetary_value).toFixed(0)}`,
+      )
+      .join("\n") || "- No open opportunities synced";
     return deliverOnce(
       admin,
       ownerId,
@@ -182,16 +220,19 @@ async function runMode(
     );
   }
   if (mode === "eodEnforce" || mode === "eodLink") {
-    if (mode === "eodLink" && settings.eod_link_enabled === false)
+    if (mode === "eodLink" && settings.eod_link_enabled === false) {
       return { created: false, reason: "disabled" };
+    }
     const configuredTime = String(settings.eod_link_send_time ?? "16:00").slice(
       0,
       5,
     );
-    if (
-      localTime(String(settings.timezone ?? "America/Chicago")) < configuredTime
-    )
+    const delay = mode === "eodEnforce"
+      ? Number(settings.eod_enforce_delay_minutes ?? 30)
+      : 0;
+    if (!scheduleReached(timeZone, configuredTime, delay)) {
       return { created: false, reason: `scheduled_for_${configuredTime}` };
+    }
     const { data: members } = await admin
       .from("charles_account_members")
       .select("member_user_id,display_name,invited_email,eod_token")
@@ -209,23 +250,25 @@ async function runMode(
       const done = new Set((reports ?? []).map((row) => row.user_id));
       recipients = recipients.filter((row) => !done.has(row.member_user_id));
     }
-    if (!recipients.length)
+    if (!recipients.length) {
       return {
         created: false,
         reason: mode === "eodEnforce" ? "all_submitted" : "no_reps",
       };
+    }
     const origin = (Deno.env.get("APP_ORIGIN") ?? "").replace(/\/$/, "");
     const links = recipients
       .map((row) => {
         const url = `${origin}/eod/${row.eod_token}`;
-        const message =
-          mode === "eodLink"
-            ? String(
-                settings.eod_link_template ??
-                  "Please complete today's EOD report: {url}",
-              ).replaceAll("{url}", url)
-            : `Missing report: ${url}`;
-        return `- ${row.display_name ?? row.invited_email ?? "Rep"}: ${message}`;
+        const message = mode === "eodLink"
+          ? String(
+            settings.eod_link_template ??
+              "Please complete today's EOD report: {url}",
+          ).replaceAll("{url}", url)
+          : `Missing report: ${url}`;
+        return `- ${
+          row.display_name ?? row.invited_email ?? "Rep"
+        }: ${message}`;
       })
       .join("\n");
     return deliverOnce(
@@ -234,7 +277,9 @@ async function runMode(
       mode,
       today,
       mode === "eodEnforce" ? "Charles EOD follow-up" : "Charles EOD links",
-      `## ${mode === "eodEnforce" ? "Missing EOD reports" : "Today's EOD links"}\n\n${links}`,
+      `## ${
+        mode === "eodEnforce" ? "Missing EOD reports" : "Today's EOD links"
+      }\n\n${links}`,
     );
   }
   if (mode === "morale") {
@@ -258,7 +303,9 @@ async function runMode(
     const teamColor = moods.length
       ? order[Math.max(...moods.map((mood) => order.indexOf(mood)))]
       : "yellow";
-    const summary = `${reports?.length ?? 0} EOD reports received. Team status: ${teamColor}.`;
+    const summary = `${
+      reports?.length ?? 0
+    } EOD reports received. Team status: ${teamColor}.`;
     await admin.from("charles_morale_daily").upsert(
       {
         user_id: ownerId,
@@ -309,7 +356,9 @@ async function runMode(
       "Role-play the most common objection.",
       "Assign a dated next step to every open deal.",
     ];
-    const summary = `${grades?.length ?? 0} graded calls · ${score.toFixed(0)} coaching score · ${wins} wins.`;
+    const summary = `${grades?.length ?? 0} graded calls · ${
+      score.toFixed(0)
+    } coaching score · ${wins} wins.`;
     await admin.from("charles_coaching_weekly").upsert(
       {
         user_id: ownerId,
@@ -332,7 +381,9 @@ async function runMode(
       mode,
       weekStart,
       `Charles weekly coaching · ${weekStart}`,
-      `## Weekly scorecard\n\n${summary}\n\n${actions.map((action) => `- ${action}`).join("\n")}`,
+      `## Weekly scorecard\n\n${summary}\n\n${
+        actions.map((action) => `- ${action}`).join("\n")
+      }`,
     );
   }
   return { created: false };
@@ -353,8 +404,9 @@ async function deliverOnce(
     .eq("reminder_kind", kind)
     .eq("dedupe_key", key)
     .maybeSingle();
-  if (existing?.fired_at)
+  if (existing?.fired_at) {
     return { created: false, reason: "already_delivered" };
+  }
   let id = existing?.id;
   if (!id) {
     const { data, error } = await admin
@@ -379,7 +431,7 @@ async function deliverOnce(
     title,
     markdown,
   );
-  if (delivered.ok)
+  if (delivered.ok) {
     await admin
       .from("charles_reminders")
       .update({
@@ -387,6 +439,7 @@ async function deliverOnce(
         clickup_task_id: delivered.taskId ?? null,
       })
       .eq("id", id);
+  }
   return {
     created: delivered.ok,
     taskUrl: delivered.taskUrl,
@@ -495,6 +548,34 @@ function localTime(timeZone: string) {
     }).format(new Date());
   } catch {
     return new Date().toISOString().slice(11, 16);
+  }
+}
+function scheduleReached(timeZone: string, target: string, delayMinutes = 0) {
+  const current = localTime(timeZone).split(":").map(Number);
+  const scheduled = target.slice(0, 5).split(":").map(Number);
+  if (
+    current.length !== 2 || scheduled.length !== 2 ||
+    current.some((value) => !Number.isFinite(value)) ||
+    scheduled.some((value) => !Number.isFinite(value))
+  ) return false;
+  const currentMinutes = current[0] * 60 + current[1];
+  const targetMinutes = Math.min(
+    1439,
+    scheduled[0] * 60 + scheduled[1] + Math.max(0, delayMinutes),
+  );
+  return currentMinutes >= targetMinutes;
+}
+function businessWeekday(timeZone: string) {
+  try {
+    const name = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "short",
+    }).format(new Date());
+    return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(
+      name,
+    );
+  } catch {
+    return new Date().getUTCDay();
   }
 }
 function mondayDate(date: string) {
