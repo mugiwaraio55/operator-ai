@@ -9,6 +9,9 @@ verify_jwt = true
 [functions.assistant-run]
 verify_jwt = true
 
+[functions.media-buyer-tools]
+verify_jwt = true
+
 [functions.sales-integrations]
 verify_jwt = true
 

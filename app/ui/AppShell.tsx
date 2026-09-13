@@ -41,6 +41,7 @@ import {
   type SalesCall,
 } from "./demoData";
 import { SalesManagerModule, type SalesModule } from "./SalesManagerModules";
+import { MediaBuyerModule, type MediaModule } from "./MediaBuyerModules";
 
 type Workspace = "sales" | "media";
 type View =
@@ -49,6 +50,9 @@ type View =
   | "pipeline"
   | "charles"
   | "team"
+  | "media-tools"
+  | "media-structure"
+  | "media-history"
   | "integrations";
 type Modal = "ask" | "call" | "eod" | "tool" | null;
 type ToolKey = "audit" | "spy" | "script" | "draft";
@@ -622,6 +626,30 @@ export function AppShell() {
               <Users size={16} /> Team
             </button>
           )}
+          {workspace === "media" && (
+            <button
+              className={view === "media-tools" ? "active" : ""}
+              onClick={() => setView("media-tools")}
+            >
+              <WandSparkles size={16} /> AI tools
+            </button>
+          )}
+          {workspace === "media" && (
+            <button
+              className={view === "media-structure" ? "active" : ""}
+              onClick={() => setView("media-structure")}
+            >
+              <BarChart3 size={16} /> Account structure
+            </button>
+          )}
+          {workspace === "media" && (
+            <button
+              className={view === "media-history" ? "active" : ""}
+              onClick={() => setView("media-history")}
+            >
+              <History size={16} /> Tool history
+            </button>
+          )}
           <button
             className={view === "integrations" ? "active" : ""}
             onClick={() => setView("integrations")}
@@ -705,6 +733,9 @@ export function AppShell() {
           {workspace === "sales" && <button className={view === "pipeline" ? "active" : ""} onClick={() => setView("pipeline")}>GHL & grading</button>}
           {workspace === "sales" && <button className={view === "charles" ? "active" : ""} onClick={() => setView("charles")}>Charles</button>}
           {workspace === "sales" && <button className={view === "team" ? "active" : ""} onClick={() => setView("team")}>Team</button>}
+          {workspace === "media" && <button className={view === "media-tools" ? "active" : ""} onClick={() => setView("media-tools")}>AI tools</button>}
+          {workspace === "media" && <button className={view === "media-structure" ? "active" : ""} onClick={() => setView("media-structure")}>Structure</button>}
+          {workspace === "media" && <button className={view === "media-history" ? "active" : ""} onClick={() => setView("media-history")}>History</button>}
           <button className={view === "integrations" ? "active" : ""} onClick={() => setView("integrations")}>Integrations</button>
         </nav>
         {view === "overview" && (
@@ -777,8 +808,7 @@ export function AppShell() {
                   campaigns={campaigns}
                   onTool={(tool) => {
                     setActiveTool(tool);
-                    setResult("");
-                    setModal("tool");
+                    setView("media-tools");
                   }}
                 />
               )}
@@ -801,6 +831,17 @@ export function AppShell() {
                 isDemo={isDemo}
               />
             )}
+          {workspace === "media" &&
+            ["media-tools", "media-structure", "media-history"].includes(
+              view,
+            ) && (
+              <MediaBuyerModule
+                key={`${view}-${activeTool}`}
+                module={view as MediaModule}
+                isDemo={isDemo}
+                initialTool={activeTool}
+              />
+            )}
           {view === "integrations" && (
             <>
               <Integrations
@@ -818,6 +859,15 @@ export function AppShell() {
               {workspace === "sales" && (
                 <div className="sales-settings-wrap">
                   <SalesManagerModule module="sales-settings" isDemo={isDemo} />
+                </div>
+              )}
+              {workspace === "media" && (
+                <div className="sales-settings-wrap">
+                  <MediaBuyerModule
+                    module="media-settings"
+                    isDemo={isDemo}
+                    onConnectMeta={() => void connect("meta")}
+                  />
                 </div>
               )}
             </>

@@ -3,7 +3,7 @@
 Operator AI is a standalone application containing only the two requested products:
 
 - **AI Sales Manager / Charles** — persistent AI sales chat and memory, GoHighLevel appointment and opportunity sync, GHL and Fathom call ingestion, automatic transcript grading, team invitations, owner reporting, magic-link EOD reports, and nine scheduled management workflows.
-- **AI Media Buyer** — Meta Ads syncing, campaign metrics, scale/iterate/kill recommendations, account audits, angle research, ad scripts, paused-draft briefs, and ClickUp delivery.
+- **AI Media Buyer** - selectable Meta ad accounts, campaign/ad-set/ad inspection, seven-day account audits, Meta Ad Library research, compliant AI ad scripts, sandboxed ad previews, real paused campaign drafts, saved tool history, and ClickUp delivery.
 
 Slack is not used. Every automated notification and brief is delivered as a ClickUp task. The app opens with safe sample data until Supabase is configured.
 
@@ -26,6 +26,7 @@ Open `http://localhost:3000`. Leave the placeholder Supabase values in place to 
 
    1. `supabase/schema.sql`
    2. `supabase/ai_sales_manager.sql`
+   3. `supabase/ai_media_buyer.sql`
 
 3. In **Authentication > URL Configuration**, add `http://localhost:3000` and the eventual production URL as redirect URLs.
 4. Put the browser-safe values in `.env.local`:
@@ -164,7 +165,7 @@ The nine modes are `scan`, `dropball`, `crm`, `morale`, `leadsdigest`, `briefing
    https://YOUR_PROJECT_REF.supabase.co/functions/v1/integration-oauth?provider=meta
    ```
 
-4. The app requests `ads_read`, `ads_management`, and `business_management`. The included workflow reads performance and produces a paused-draft brief; it never activates ads or spends automatically.
+4. The app requests `ads_read`, `ads_management`, and `business_management`. The Meta user must have access to each ad account and to the Facebook Page identity used by a draft creative.
 5. Add the app values to Supabase Edge Function Secrets:
 
    ```text
@@ -173,7 +174,19 @@ The nine modes are `scan`, `dropball`, `crm`, `morale`, `leadsdigest`, `briefing
    META_GRAPH_API_VERSION=v24.0
    ```
 
-6. In Operator AI, connect Meta, approve access, and run **Sync campaigns**.
+6. In Operator AI, connect Meta, approve access, then open **AI Media Buyer > Integrations** and select the intended ad account.
+7. Run **Sync campaigns**, then verify **Account structure** and **Account audit** before creating a draft.
+
+### AI Media Buyer functions
+
+- **Account audit** reads the last seven days of ad-level spend, impressions, clicks, leads, purchases, revenue, CTR, CPC, CPL, CPA, and ROAS. AI analysis uses only the returned Meta data; a deterministic analysis remains available without an AI key.
+- **Ad Library research** searches active commercial ads in the EU or United Kingdom. Meta restricts this commercial API surface by country. When API access is unavailable, Operator AI creates a ready-to-open public Ad Library search instead. A separate `META_AD_LIBRARY_ACCESS_TOKEN` Edge Function secret can be supplied if your Meta app uses a dedicated token.
+- **Compliant ad scripts** generates three structured angles, hooks, primary text, headlines, calls to action, a test plan, and compliance reminders. It uses the Media Buyer AI provider configured in the app, or the project-wide AI fallback.
+- **Create paused draft** makes a real Meta campaign, ad set, creative, and ad in sequence. Every delivery-capable object is submitted with `PAUSED`; the app has no activate button. Enter a Facebook Page ID, public HTTPS creative image, destination URL, budget, country, and reviewed copy. Partial failures are recorded with every Meta object ID already created so cleanup is auditable.
+- **Account structure** shows campaigns, ad sets, ads, and their seven-day metrics. Ad previews are rendered in a restricted browser frame.
+- **History** stores completed tool results and a separate draft ledger. Any saved result can be sent to the selected ClickUp List as a task.
+
+Use a Meta test ad account first. Check the campaign, ad set, creative, destination, pixel/dataset, attribution, Page identity, targeting, budget, special-ad-category requirements, and policy compliance in Ads Manager before manually activating anything.
 
 Development access is usually limited to app admins, developers, and testers. Before outside clients connect, put the app in Live mode and complete any Meta review requirements for the requested permissions. Confirm current requirements in the [Meta Marketing API documentation](https://developers.facebook.com/docs/marketing-apis/).
 
@@ -182,6 +195,7 @@ Development access is usually limited to app admins, developers, and testers. Be
 - Set the exact HTTPS `APP_ORIGIN` and Supabase Auth redirects.
 - Keep all secrets in Edge Function Secrets or Vault.
 - Test GHL sync, one GHL appointment webhook, one signed Fathom meeting, call grading, a team invite, an EOD submission, and a ClickUp task before enabling schedules.
+- With a Meta test account, test account selection, campaign sync, audit, structure, one ad preview, one Ad Library search, one AI script, one paused draft, and one saved-result ClickUp delivery. Confirm all created Meta delivery objects remain paused.
 - Run `npm run lint`, `npm run build`, and `npm audit` before deployment.
 - Rotate any webhook token, PIT, OAuth credential, AI key, or service-role key that is exposed.
 
