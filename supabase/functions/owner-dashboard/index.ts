@@ -1,0 +1,107 @@
+import {
+  adminClient,
+  authorizeUser,
+  corsHeaders,
+  json,
+} from "../_shared/supabase.ts";
+import { ensureSalesWorkspace } from "../_shared/sales.ts";
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS")
+    return new Response(null, { headers: corsHeaders });
+  if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
+  const { user } = await authorizeUser(req);
+  if (!user) return json({ error: "Sign in is required." }, 401);
+  const admin = adminClient();
+  const membership = await ensureSalesWorkspace(admin, user.id, user.email);
+  if (membership.role !== "owner")
+    return json({ error: "Owner dashboard access is required." }, 403);
+  const { data: members } = await admin
+    .from("charles_account_members")
+    .select("member_user_id,display_name,invited_email,is_active")
+    .eq("owner_user_id", user.id);
+  const ids = (members ?? [])
+    .filter((row) => row.is_active)
+    .map((row) => row.member_user_id);
+  const since = new Date(Date.now() - 7 * 86400000).toISOString();
+  const sinceDate = since.slice(0, 10);
+  const [calls, eods, grades, appointments, coaching] = await Promise.all([
+    admin
+      .from("sales_calls")
+      .select("user_id,outcome,score,revenue,happened_at")
+      .in("user_id", ids)
+      .gte("happened_at", since),
+    admin
+      .from("sales_eod_reports")
+      .select("user_id,report_date,calls_taken,closes,revenue,mood,crm_updated")
+      .in("user_id", ids)
+      .gte("report_date", sinceDate),
+    admin
+      .from("sales_call_gradings")
+      .select("user_id,overall_score,script_adherence_pct,graded_at")
+      .in("user_id", ids)
+      .gte("graded_at", since),
+    admin
+      .from("sales_appointments")
+      .select("user_id,status,outcome,revenue,scheduled_at")
+      .in("user_id", ids)
+      .gte("scheduled_at", since),
+    admin
+      .from("charles_coaching_weekly")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("week_start", { ascending: false })
+      .limit(1),
+  ]);
+  const roster = (members ?? []).map((member) => {
+    const memberCalls = (calls.data ?? []).filter(
+      (row) => row.user_id === member.member_user_id,
+    );
+    const memberGrades = (grades.data ?? []).filter(
+      (row) =>
+        row.user_id === member.member_user_id && row.overall_score !== null,
+    );
+    const memberEods = (eods.data ?? []).filter(
+      (row) => row.user_id === member.member_user_id,
+    );
+    return {
+      ...member,
+      calls: memberCalls.length,
+      wins: memberCalls.filter((row) => row.outcome === "won").length,
+      revenue: memberCalls.reduce(
+        (sum, row) => sum + Number(row.revenue ?? 0),
+        0,
+      ),
+      average_score: memberGrades.length
+        ? memberGrades.reduce(
+            (sum, row) => sum + Number(row.overall_score),
+            0,
+          ) / memberGrades.length
+        : null,
+      eod_reports: memberEods.length,
+      crm_compliance: memberEods.length
+        ? Math.round(
+            (memberEods.filter((row) => row.crm_updated).length /
+              memberEods.length) *
+              100,
+          )
+        : null,
+    };
+  });
+  return json({
+    ok: true,
+    period: { from: sinceDate, to: new Date().toISOString().slice(0, 10) },
+    roster,
+    totals: {
+      calls: (calls.data ?? []).length,
+      wins: (calls.data ?? []).filter((row) => row.outcome === "won").length,
+      revenue: (calls.data ?? []).reduce(
+        (sum, row) => sum + Number(row.revenue ?? 0),
+        0,
+      ),
+      appointments: (appointments.data ?? []).length,
+      eod_reports: (eods.data ?? []).length,
+    },
+    coaching: coaching.data?.[0] ?? null,
+  });
+});

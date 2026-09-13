@@ -12,3 +12,4 @@ export const supabase: SupabaseClient | null = isSupabaseConfigured
   : null;
 
 export const supabaseProjectUrl = url ?? '';
+export const supabasePublishableKey = publishableKey ?? '';

@@ -35,7 +35,7 @@ create table if not exists public.app_settings (
 
 create table if not exists public.integration_connections (
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('clickup', 'meta')),
+  provider text not null check (provider in ('clickup', 'meta', 'ghl', 'ai', 'fathom')),
   status text not null default 'connected' check (status in ('connected', 'disconnected', 'error')),
   account_id text,
   account_name text,
@@ -48,7 +48,7 @@ create table if not exists public.integration_connections (
 
 create table if not exists private.integration_secret_refs (
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('clickup', 'meta')),
+  provider text not null check (provider in ('clickup', 'meta', 'ghl', 'ai', 'fathom')),
   secret_id uuid not null,
   updated_at timestamptz not null default now(),
   primary key (user_id, provider),
@@ -227,7 +227,7 @@ declare
   stored_id uuid;
   secret_name text := 'operator-ai:' || p_user::text || ':' || p_provider;
 begin
-  if p_provider not in ('clickup', 'meta') or btrim(coalesce(p_secret, '')) = '' then
+  if p_provider not in ('clickup', 'meta', 'ghl', 'ai', 'fathom') or btrim(coalesce(p_secret, '')) = '' then
     raise exception 'Invalid integration secret';
   end if;
   perform pg_advisory_xact_lock(hashtextextended(secret_name, 0));
@@ -260,6 +260,21 @@ as $$
   where refs.user_id = p_user and refs.provider = p_provider;
 $$;
 
+create or replace function public.clear_integration_secret(p_user uuid, p_provider text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare stored_id uuid;
+begin
+  select secret_id into stored_id from private.integration_secret_refs
+    where user_id = p_user and provider = p_provider for update;
+  delete from private.integration_secret_refs where user_id = p_user and provider = p_provider;
+  if stored_id is not null then delete from vault.secrets where id = stored_id; end if;
+end;
+$$;
+
 create or replace function public.put_oauth_state(p_hash text, p_user uuid, p_provider text, p_return_url text)
 returns void
 language sql
@@ -288,10 +303,12 @@ $$;
 
 revoke all on function public.set_integration_secret(uuid, text, text) from public, anon, authenticated;
 revoke all on function public.get_integration_secret(uuid, text) from public, anon, authenticated;
+revoke all on function public.clear_integration_secret(uuid, text) from public, anon, authenticated;
 revoke all on function public.put_oauth_state(text, uuid, text, text) from public, anon, authenticated;
 revoke all on function public.consume_oauth_state(text, text) from public, anon, authenticated;
 grant execute on function public.set_integration_secret(uuid, text, text) to service_role;
 grant execute on function public.get_integration_secret(uuid, text) to service_role;
+grant execute on function public.clear_integration_secret(uuid, text) to service_role;
 grant execute on function public.put_oauth_state(text, uuid, text, text) to service_role;
 grant execute on function public.consume_oauth_state(text, text) to service_role;
 

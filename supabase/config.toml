@@ -8,3 +8,36 @@ verify_jwt = true
 
 [functions.assistant-run]
 verify_jwt = true
+
+[functions.sales-integrations]
+verify_jwt = true
+
+[functions.ghl-proxy]
+verify_jwt = true
+
+[functions.charles-chat]
+verify_jwt = true
+
+[functions.team-manager]
+verify_jwt = true
+
+[functions.owner-dashboard]
+verify_jwt = true
+
+[functions.grade-call]
+verify_jwt = true
+
+[functions.charles-autopilot]
+verify_jwt = true
+
+[functions.ghl-appointment-webhook]
+verify_jwt = false
+
+[functions.ghl-call-webhook]
+verify_jwt = false
+
+[functions.fathom-webhook]
+verify_jwt = false
+
+[functions.eod-form]
+verify_jwt = false
