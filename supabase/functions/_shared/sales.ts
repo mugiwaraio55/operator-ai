@@ -299,11 +299,16 @@ export async function gradeTranscript(
       .filter(Boolean)
       .join("\n\n")
       .slice(0, 18000);
+    const rubric = Object.entries(CALL_GRADING_RUBRIC)
+      .map(([key, description]) => `- ${key}: ${description}`)
+      .join("\n");
     const instruction = [
-      "Grade this sales call against the supplied sales operating context.",
-      "Use only the transcript for claims about what happened on the call; use the context as the rubric.",
-      "Return only JSON with overall_score 0-100, script_adherence_pct 0-100, category_scores object, strengths string array, improvements string array, and coaching_notes string.",
+      "You are an elite IUL/life-insurance sales coach grading a recorded IUL Demand Capture sales call.",
+      "Use only the transcript for claims about what happened on the call. Use the manager's sales process as the expected script and the rubric below as the scorecard.",
+      `Rubric (score every category 0-100):\n${rubric}`,
       operatingContext ? `Sales operating context:\n${operatingContext}` : "",
+      'Return only valid JSON matching this schema: {"overall_score":0,"script_adherence_pct":0,"category_scores":{},"strengths":["up to 5 short bullets"],"improvements":["up to 5 short bullets"],"coaching_notes":"2-4 specific paragraphs addressed to the rep","rep_feedback":"A short, casual manager note: what went well, 1-3 next-call actions, and encouragement."}',
+      "Flag missed $45 verified-lead pricing, the $1,500 setup fee, an inaccurate Lead Integrity Guarantee, or any results guarantee. Do not invent quotes or facts.",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -346,7 +351,7 @@ export async function gradeTranscript(
           model,
           instructions: instruction,
           input: transcript.slice(0, 40000),
-          max_output_tokens: 900,
+          max_output_tokens: 1500,
         }),
       });
       const payload = (await response.json()) as { output_text?: string };
@@ -370,6 +375,9 @@ export async function gradeTranscript(
       coaching_notes: typeof parsed.coaching_notes === "string"
         ? parsed.coaching_notes.slice(0, 5000)
         : fallback.coaching_notes,
+      rep_feedback: typeof parsed.rep_feedback === "string"
+        ? parsed.rep_feedback.slice(0, 2000)
+        : fallback.rep_feedback,
       model,
     };
   } catch {
@@ -386,40 +394,75 @@ function bounded(value: unknown, fallback: number) {
 
 function stringArray(value: unknown, fallback: string[]) {
   return Array.isArray(value)
-    ? (value.filter((item) => typeof item === "string").slice(0, 8) as string[])
+    ? (value.filter((item) => typeof item === "string").slice(0, 5) as string[])
     : fallback;
 }
 
+const CALL_GRADING_RUBRIC = {
+  opening: "Pattern interrupt, name, purpose, and permission to continue",
+  discovery:
+    "State, IUL focus, current lead source, follow-up process, budget, and capacity",
+  demand_capture_explanation:
+    "Explains the four-step IUL Demand Capture system simply, not as a list",
+  state_availability_handling:
+    "Confirms or sets expectations on state capacity before promising delivery",
+  pricing_disclosure:
+    "Discloses $45 per verified lead and the $1,500 one-time setup fee before signup",
+  setup_fee_explanation:
+    "Frames the setup fee as system build, routing, campaign launch, and state controls",
+  proof_usage:
+    "Uses the four-step overview, verification, an ROI scenario, and approved proof assets",
+  guarantee_accuracy:
+    "States the Lead Integrity Guarantee accurately: credit only for failed-verification leads",
+  no_results_guarantee_compliance:
+    "Never guarantees appointments, applications, policies, or close rates",
+  objection_handling:
+    "Acknowledge, isolate, reframe, and confirm; addresses setup fee and pricing cleanly",
+  close_next_step:
+    "Makes a clear ask, books a demo or sends the signup link, and calendars the next step",
+  crm_eod_readiness:
+    "Captures enough detail for CRM and EOD reporting, including state, volume, and objections",
+} as const;
+
 function deterministicGrade(transcript: string) {
   const lower = transcript.toLowerCase();
-  const signals = [
-    "problem",
-    "goal",
-    "timeline",
-    "decision",
-    "budget",
-    "next step",
-  ].filter((word) => lower.includes(word));
-  const score = Math.min(92, 55 + signals.length * 6);
+  const has = (...terms: string[]) => terms.some((term) => lower.includes(term));
+  const categories = {
+    opening: has("is now a bad time", "permission", "quick question") ? 82 : 58,
+    discovery: has("state", "lead source") && has("budget", "capacity") ? 84 : 60,
+    demand_capture_explanation: has("four-step", "four step", "demand capture") ? 85 : 55,
+    state_availability_handling: has("state availability", "state capacity", "available in your state") ? 86 : 56,
+    pricing_disclosure: has("$45", "45 per", "forty-five") && has("$1,500", "1500", "one-time setup") ? 90 : 45,
+    setup_fee_explanation: has("system build", "routing", "campaign launch", "state controls") ? 84 : 54,
+    proof_usage: has("verification", "roi", "return on investment") ? 82 : 58,
+    guarantee_accuracy: has("lead integrity guarantee", "failed verification", "lead credit") ? 88 : 56,
+    no_results_guarantee_compliance: has("guaranteed appointments", "guaranteed policies", "guaranteed close") ? 20 : 90,
+    objection_handling: has("understand", "is that the main", "if we solved") ? 80 : 58,
+    close_next_step: has("next step", "calendar", "signup link", "book a demo") ? 86 : 52,
+    crm_eod_readiness: has("state") && has("volume", "objection", "follow up") ? 82 : 58,
+  };
+  const values = Object.values(categories);
+  const score = Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
   return {
     overall_score: score,
-    script_adherence_pct: Math.min(95, score + 3),
-    category_scores: {
-      discovery: lower.includes("problem") ? 82 : 60,
-      qualification: lower.includes("budget") || lower.includes("decision")
-        ? 80
-        : 58,
-      next_steps: lower.includes("next step") ? 86 : 55,
-    },
-    strengths: signals.length
-      ? [`Covered ${signals.slice(0, 3).join(", ")}`]
-      : ["Maintained a clear conversation"],
+    script_adherence_pct: score,
+    category_scores: categories,
+    strengths: [
+      categories.no_results_guarantee_compliance >= 80
+        ? "Avoided making an unsupported results guarantee"
+        : "Maintained a clear conversation",
+    ],
     improvements: [
-      lower.includes("next step")
-        ? "Confirm ownership and timing in writing"
-        : "End with a specific next step",
+      categories.pricing_disclosure < 80
+        ? "Disclose both the $45 verified-lead price and $1,500 setup fee before signup"
+        : "Tie the pricing recap directly to the prospect's volume and capacity",
+      categories.close_next_step < 80
+        ? "End with one dated, owned next step"
+        : "Send the agreed next step in writing immediately after the call",
     ],
     coaching_notes:
-      "Use the strongest discovery answer to quantify the cost of waiting, then confirm a dated next action.",
+      "Use the discovery answers to connect the prospect's state, volume, follow-up capacity, and budget to the four-step system. State both pricing components before asking for commitment, explain what the setup fee builds, and close with one dated next action.",
+    rep_feedback:
+      "Good work keeping the conversation moving.\n• Confirm state, volume, budget, and capacity.\n• Disclose both pricing components before the close.\n• Calendar one clear next step.\nApply those on the next call.",
   };
 }

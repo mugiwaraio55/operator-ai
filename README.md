@@ -98,6 +98,10 @@ The Sales Manager Integrations page displays private tokenized URLs for appointm
 
 - Appointment payloads are upserted into `sales_appointments`.
 - Call payloads are upserted into `sales_calls` and `sales_call_gradings`.
+- Fathom, GHL, Zapier, and form-based webhook payloads are normalized across their common nested field names. The endpoints also support authenticated `GET` health checks.
+- Calls move through `pending`, `grading`, `completed`, or `failed`. Owners can review and regrade calls for active team members; reps can only access their own calls.
+- The grader uses the reference app's 12-category IUL Demand Capture scorecard, including pricing disclosure, guarantee compliance, objection handling, close/next step, and CRM/EOD readiness. The manager's Sales Process, Offer, and Industry Knowledge documents are included as grading context.
+- Fathom signature verification remains enabled when a Fathom `whsec_` secret is connected. GHL workflow URLs remain protected by the account's rotatable webhook token.
 - If the call payload contains a transcript, Charles grades it immediately. Otherwise it remains available for a later transcript or manual grading.
 
 Treat each URL like a password because it contains the account webhook token. Rotating the token immediately invalidates all previous URLs. HighLevel’s marketplace webhook system also supports signed webhooks; see its [webhook integration guide](https://marketplace.gohighlevel.com/docs/webhook/WebhookIntegrationGuide/).

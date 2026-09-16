@@ -106,6 +106,7 @@ create table if not exists public.sales_appointments (
   calendar_name text,
   assigned_user_id text,
   assigned_user_name text,
+  assigned_user_email text,
   scheduled_at timestamptz not null,
   status text not null default 'booked',
   outcome text not null default 'pending',
@@ -154,13 +155,14 @@ create table if not exists public.sales_call_gradings (
   recording_url text,
   transcript text,
   duration_seconds integer check (duration_seconds is null or duration_seconds >= 0),
-  status text not null default 'pending' check (status in ('pending','graded','failed')),
+  status text not null default 'pending' check (status in ('pending','grading','completed','graded','failed')),
   overall_score numeric(5,2) check (overall_score is null or overall_score between 0 and 100),
   script_adherence_pct numeric(5,2) check (script_adherence_pct is null or script_adherence_pct between 0 and 100),
   category_scores jsonb not null default '{}'::jsonb check (jsonb_typeof(category_scores) = 'object'),
   strengths text[] not null default '{}',
   improvements text[] not null default '{}',
   coaching_notes text,
+  rep_feedback text,
   grader_model text,
   error_message text,
   raw_payload jsonb not null default '{}'::jsonb check (jsonb_typeof(raw_payload) = 'object'),
@@ -260,6 +262,9 @@ create policy sales_manager_settings_own on public.sales_manager_settings for al
 drop policy if exists charles_members_self_read on public.charles_account_members;
 create policy charles_members_self_read on public.charles_account_members for select to authenticated
   using ((select auth.uid()) = member_user_id);
+drop policy if exists charles_members_owner_read on public.charles_account_members;
+create policy charles_members_owner_read on public.charles_account_members for select to authenticated
+  using ((select auth.uid()) = owner_user_id);
 
 do $$
 declare table_name text;
@@ -283,6 +288,23 @@ drop policy if exists sales_os_documents_write_own on public.sales_os_documents;
 create policy sales_os_documents_write_own on public.sales_os_documents for insert to authenticated with check ((select auth.uid()) = user_id);
 drop policy if exists sales_os_documents_update_own on public.sales_os_documents;
 create policy sales_os_documents_update_own on public.sales_os_documents for update to authenticated using ((select auth.uid()) = user_id) with check ((select auth.uid()) = user_id);
+
+drop policy if exists sales_call_gradings_select_team on public.sales_call_gradings;
+create policy sales_call_gradings_select_team on public.sales_call_gradings for select to authenticated
+  using (exists (
+    select 1 from public.charles_account_members membership
+    where membership.owner_user_id = (select auth.uid())
+      and membership.member_user_id = sales_call_gradings.user_id
+      and membership.is_active = true
+  ));
+drop policy if exists sales_appointments_select_team on public.sales_appointments;
+create policy sales_appointments_select_team on public.sales_appointments for select to authenticated
+  using (exists (
+    select 1 from public.charles_account_members membership
+    where membership.owner_user_id = (select auth.uid())
+      and membership.member_user_id = sales_appointments.user_id
+      and membership.is_active = true
+  ));
 
 do $$
 declare table_name text;

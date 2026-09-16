@@ -8,6 +8,8 @@ import {
   Bot,
   CalendarDays,
   ClipboardCheck,
+  Copy,
+  ExternalLink,
   LoaderCircle,
   Medal,
   Plus,
@@ -17,7 +19,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseProjectUrl } from "@/lib/supabase";
 import {
   blankEodAnswers,
   cloneDefaultEodSchema,
@@ -50,6 +52,7 @@ type SalesState = {
   membership?: Row;
   settings?: Row;
   connections?: Row[];
+  webhook?: Row | null;
 };
 
 const autopilotFunctions = [
@@ -1209,173 +1212,145 @@ function CallReportingPanel({ isDemo }: { isDemo: boolean }) {
 
 function CallGradingPanel({ isDemo }: { isDemo: boolean }) {
   const [grades, setGrades] = useState<Row[]>(isDemo ? demoGrades : []);
-  const [selected, setSelected] = useState<Row | null>(
-    isDemo ? demoGrades[0] : null,
-  );
+  const [selected, setSelected] = useState<Row | null>(isDemo ? demoGrades[0] : null);
+  const [workspace, setWorkspace] = useState<SalesState>({});
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const load = useCallback(async () => {
     if (isDemo || !supabase) return;
     setBusy(true);
-    const { data, error } = await supabase
-      .from("sales_call_gradings")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
-    setBusy(false);
-    if (error) setNotice(error.message);
-    else {
-      setGrades(data ?? []);
-      setSelected((current) => current ?? data?.[0] ?? null);
+    try {
+      const [state, result] = await Promise.all([
+        salesState(),
+        supabase.from("sales_call_gradings").select("*").order("created_at", { ascending: false }).limit(200),
+      ]);
+      if (result.error) throw result.error;
+      setWorkspace(state);
+      setGrades(result.data ?? []);
+      setSelected((current) =>
+        (result.data ?? []).find((row) => row.id === current?.id) ?? result.data?.[0] ?? null,
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Call grading could not be loaded.");
+    } finally {
+      setBusy(false);
     }
   }, [isDemo]);
   useEffect(() => {
     queueMicrotask(() => void load());
-  }, [load]);
-  async function grade(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+    if (isDemo || !supabase) return;
+    const channel = supabase
+      .channel("sales-call-gradings")
+      .on("postgres_changes", { event: "*", schema: "public", table: "sales_call_gradings" }, () => void load())
+      .subscribe();
+    return () => {
+      void supabase?.removeChannel(channel);
+    };
+  }, [isDemo, load]);
+
+  async function runGrade(body: Row, success: string) {
     if (isDemo) {
       setNotice("Demo transcript graded: 86/100.");
-      return;
+      return true;
     }
-    if (!supabase) return;
-    const values = new FormData(event.currentTarget);
+    if (!supabase) return false;
     setBusy(true);
-    const { data, error } = await supabase.functions.invoke("grade-call", {
-      body: {
-        title: values.get("title"),
-        repName: values.get("repName"),
-        transcript: values.get("transcript"),
-      },
-    });
+    const { data, error } = await supabase.functions.invoke("grade-call", { body });
     setBusy(false);
-    if (error || data?.error) setNotice(error?.message ?? String(data.error));
-    else {
-      setNotice("Call graded and added to coaching history.");
-      event.currentTarget.reset();
-      await load();
+    if (error || data?.error) {
+      setNotice(error?.message ?? String(data.error));
+      return false;
     }
+    setNotice(success);
+    await load();
+    return true;
   }
-  const categories =
-    selected?.category_scores && typeof selected.category_scores === "object"
-      ? Object.entries(selected.category_scores as Row)
-      : [];
+  async function grade(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    if (await runGrade({ title: values.get("title"), repName: values.get("repName"), transcript: values.get("transcript") }, "Call graded and added to coaching history.")) form.reset();
+  }
+  async function copyUrl(value: string) {
+    await navigator.clipboard.writeText(value);
+    setNotice("Webhook URL copied.");
+  }
+  const token = String(workspace.webhook?.token ?? "");
+  const base = supabaseProjectUrl ? `${supabaseProjectUrl}/functions/v1` : "";
+  const fathomUrl = token && base ? `${base}/fathom-webhook?token=${token}` : "";
+  const ghlUrl = token && base ? `${base}/ghl-call-webhook?token=${token}` : "";
+  const categories = selected?.category_scores && typeof selected.category_scores === "object"
+    ? Object.entries(selected.category_scores as Row)
+    : [];
+  const status = String(selected?.status ?? "pending");
   return (
     <section>
       <ModuleHeading
         eyebrow="CALL GRADING"
         title="Coach from the actual conversation."
-        detail="Fathom and GoHighLevel webhooks grade calls automatically. Paste any transcript here for an immediate manual grade."
+        detail="Fathom and GoHighLevel calls use the same IUL Demand Capture scorecard as the reference app. Other calls can be graded by pasting a transcript."
       />
       {notice && <p className="inline-notice">{notice}</p>}
+      {fathomUrl && (
+        <div className="call-webhook-grid">
+          {[
+            { label: "Fathom webhook", url: fathomUrl, detail: "Use Fathom meeting_content_ready with transcript enabled. Direct Fathom signatures are verified when a webhook secret is connected." },
+            { label: "GHL phone call webhook", url: ghlUrl, detail: "Use a Call Status / Recording Ready workflow and send call_id, transcript, recording_url, duration, and the assigned user's email." },
+          ].map((item) => (
+            <article className="panel webhook-card" key={item.label}>
+              <b>{item.label}</b>
+              <div><code>{item.url}</code><button className="secondary-btn" type="button" onClick={() => void copyUrl(item.url)}><Copy size={15} /> Copy</button></div>
+              <small>{item.detail}</small>
+            </article>
+          ))}
+        </div>
+      )}
       <div className="grading-workspace">
         <article className="panel">
           <form className="form-stack flush" onSubmit={grade}>
-            <label>
-              Call title
-              <input
-                required
-                name="title"
-                placeholder="Discovery call - Prospect"
-              />
-            </label>
-            <label>
-              Sales rep
-              <input name="repName" placeholder="Rep name" />
-            </label>
-            <label>
-              Transcript
-              <textarea
-                required
-                minLength={40}
-                name="transcript"
-                placeholder="Paste the complete transcript..."
-              />
-            </label>
-            <button className="primary-btn" disabled={busy}>
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <Sparkles size={16} />
-              )}{" "}
-              Grade call
-            </button>
+            <label>Call title<input required name="title" placeholder="Discovery call - Prospect" /></label>
+            <label>Sales rep<input name="repName" placeholder="Rep name" /></label>
+            <label>Transcript<textarea required minLength={40} name="transcript" placeholder="Paste the complete transcript..." /></label>
+            <button className="primary-btn" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} Grade other call</button>
           </form>
           <div className="grade-history">
             {grades.map((row) => (
-              <button
-                className={selected?.id === row.id ? "active" : ""}
-                key={String(row.id)}
-                onClick={() => setSelected(row)}
-              >
+              <button className={selected?.id === row.id ? "active" : ""} key={String(row.id)} onClick={() => setSelected(row)}>
                 <span>
                   <b>{String(row.title ?? "Sales call")}</b>
-                  <small>
-                    {String(row.rep_name ?? "Unassigned")} -{" "}
-                    {String(row.provider ?? "manual")}
-                  </small>
+                  <small>{new Date(String(row.call_started_at ?? row.created_at)).toLocaleDateString()} · {String(row.rep_name ?? row.rep_email ?? "Unassigned")} · {String(row.provider ?? "manual")}</small>
+                  <small className={`grade-status ${String(row.status)}`}>{String(row.status ?? "pending")}</small>
                 </span>
-                <strong>
-                  {row.overall_score === null
-                    ? "-"
-                    : Number(row.overall_score).toFixed(0)}
-                </strong>
+                <strong>{row.overall_score == null ? "-" : Number(row.overall_score).toFixed(0)}</strong>
               </button>
             ))}
+            {!grades.length && <p className="empty-copy">No calls yet. Add a webhook or paste a transcript above.</p>}
           </div>
         </article>
         <article className="panel grade-detail">
           {selected ? (
             <>
+              <div className="grade-detail-header">
+                <span><b>{String(selected.title ?? "Sales call")}</b><small>{String(selected.rep_name ?? selected.rep_email ?? "Unassigned")} · {status}</small></span>
+                <button className="secondary-btn" type="button" disabled={busy || !selected.transcript} onClick={() => void runGrade({ gradingId: selected.id }, "Call regraded.")}><RefreshCw size={15} /> Regrade</button>
+              </div>
+              {status === "failed" && <p className="inline-notice error">Grading failed: {String(selected.error_message ?? "Unknown error")}</p>}
+              {(status === "pending" || status === "grading") && <p className="empty-copy">{status === "grading" ? "AI grading is in progress…" : "Waiting for a usable transcript."}</p>}
               <div className="grade-score">
-                <strong>
-                  {Number(selected.overall_score ?? 0).toFixed(0)}
-                </strong>
-                <span>
-                  <b>Overall call score</b>
-                  <small>
-                    {Number(selected.script_adherence_pct ?? 0).toFixed(0)}%
-                    script adherence
-                  </small>
-                </span>
+                <strong>{selected.overall_score == null ? "-" : Number(selected.overall_score).toFixed(0)}</strong>
+                <span><b>Overall call score</b><small>{selected.script_adherence_pct == null ? "-" : Number(selected.script_adherence_pct).toFixed(0)}% script adherence</small></span>
               </div>
               <div className="category-bars">
-                {categories.map(([name, value]) => (
-                  <div key={name}>
-                    <span>
-                      <b>{name.replaceAll("_", " ")}</b>
-                      <small>{Number(value).toFixed(0)}</small>
-                    </span>
-                    <i>
-                      <em
-                        style={{ width: `${Math.min(100, Number(value))}%` }}
-                      />
-                    </i>
-                  </div>
-                ))}
+                {categories.map(([name, value]) => <div key={name}><span><b>{name.replaceAll("_", " ")}</b><small>{Number(value).toFixed(0)}</small></span><i><em style={{ width: `${Math.min(100, Number(value))}%` }} /></i></div>)}
               </div>
               <ResultList title="Strengths" values={selected.strengths} />
               <ResultList title="Improvements" values={selected.improvements} />
-              <p className="coach-note">
-                {String(
-                  selected.coaching_notes ?? "No coaching note returned.",
-                )}
-              </p>
-              {selected.recording_url && (
-                <a
-                  href={String(selected.recording_url)}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open recording
-                </a>
-              )}
+              {selected.coaching_notes && <p className="coach-note">{String(selected.coaching_notes)}</p>}
+              {selected.rep_feedback && <div className="rep-feedback"><b>Rep feedback</b><p>{String(selected.rep_feedback)}</p></div>}
+              {selected.recording_url && <a className="recording-link" href={String(selected.recording_url)} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open recording</a>}
+              {selected.transcript && <details className="transcript-detail"><summary>View transcript</summary><pre>{String(selected.transcript)}</pre></details>}
             </>
-          ) : (
-            <p className="empty-copy">
-              Select a graded call to review its coaching breakdown.
-            </p>
-          )}
+          ) : <p className="empty-copy">Select a call to review its coaching breakdown.</p>}
         </article>
       </div>
     </section>

@@ -1940,6 +1940,44 @@ button {
   grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
   gap: 18px;
 }
+.call-webhook-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.webhook-card > b,
+.webhook-card > small {
+  display: block;
+}
+.webhook-card > b {
+  margin-bottom: 9px;
+  font-size: 10px;
+}
+.webhook-card > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.webhook-card code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f7f9f8;
+  color: #50635d;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.webhook-card > small {
+  margin-top: 9px;
+  color: #788681;
+  font-size: 8px;
+  line-height: 1.5;
+}
 .grade-history {
   display: grid;
   margin-top: 20px;
@@ -1964,6 +2002,22 @@ button {
 .grade-history small {
   display: block;
 }
+.grade-status {
+  width: fit-content;
+  padding: 2px 6px;
+  border-radius: 99px;
+  background: #edf1ef;
+  text-transform: capitalize;
+}
+.grade-status.completed,
+.grade-status.graded {
+  background: #e5f5ec;
+  color: #2b7456;
+}
+.grade-status.failed {
+  background: #fff0ed;
+  color: #a54635;
+}
 .grade-history b {
   font-size: 10px;
 }
@@ -1985,6 +2039,26 @@ button {
 }
 .grade-detail {
   min-height: 520px;
+}
+.grade-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.grade-detail-header b,
+.grade-detail-header small {
+  display: block;
+}
+.grade-detail-header b {
+  font-size: 12px;
+}
+.grade-detail-header small {
+  margin-top: 4px;
+  color: #7c8985;
+  font-size: 9px;
+  text-transform: capitalize;
 }
 .grade-score {
   display: flex;
@@ -2063,6 +2137,52 @@ button {
   color: #51645d;
   font-size: 10px;
   line-height: 1.55;
+}
+.rep-feedback {
+  margin-top: 12px;
+  padding: 13px;
+  border: 1px solid #dce6e1;
+  border-radius: 9px;
+}
+.rep-feedback b {
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.rep-feedback p {
+  margin: 7px 0 0;
+  color: #51645d;
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.recording-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  color: #3f735f;
+  font-size: 10px;
+  font-weight: 700;
+}
+.transcript-detail {
+  margin-top: 16px;
+  color: #60716b;
+  font-size: 10px;
+}
+.transcript-detail summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.transcript-detail pre {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 9px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f4f7f5;
+  font: inherit;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 .eod-history {
   margin-top: 18px;
@@ -2917,6 +3037,9 @@ button {
   .history-layout,
   .grading-workspace,
   .appointment-layout {
+    grid-template-columns: 1fr;
+  }
+  .call-webhook-grid {
     grid-template-columns: 1fr;
   }
   .report-scorecard {
