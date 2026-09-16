@@ -2354,6 +2354,102 @@ button {
 .form-stack.flush {
   padding: 0;
 }
+.eod-dynamic-fields {
+  display: grid;
+  gap: 22px;
+}
+.eod-dynamic-section {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.eod-section-heading {
+  margin-bottom: 13px;
+}
+.eod-section-heading h4 {
+  margin: 0;
+  font-size: 13px;
+}
+.eod-section-heading p {
+  margin: 5px 0 0;
+  color: #71807b;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.eod-field-wide {
+  grid-column: 1 / -1;
+}
+.eod-builder {
+  margin-top: 18px;
+  padding: 22px;
+}
+.eod-builder .panel-head {
+  margin-bottom: 18px;
+}
+.eod-builder-sections,
+.eod-builder-fields {
+  display: grid;
+  gap: 12px;
+}
+.eod-builder-section {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafbf9;
+}
+.eod-builder-section-head,
+.eod-builder-footer,
+.eod-builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.eod-builder-section-head > input {
+  flex: 1;
+  font-weight: 700;
+}
+.eod-section-description {
+  margin: 8px 0 12px;
+}
+.eod-builder-field {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(130px, 1fr) minmax(180px, 2fr) auto auto;
+  align-items: end;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid #e2e8e5;
+  border-radius: 9px;
+  background: white;
+}
+.eod-builder-actions button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  color: #52615d;
+  cursor: pointer;
+}
+.eod-builder-actions button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.eod-builder-footer {
+  flex-wrap: wrap;
+}
+.eod-builder-footer .primary-btn {
+  margin-left: auto;
+}
+.eod-rep-line {
+  margin: 0;
+  color: #71807b;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
 .form-stack.flush h3 {
   margin: 0 0 4px;
   font:
@@ -2863,6 +2959,16 @@ button {
   .responsibility-list,
   .weight-grid {
     grid-template-columns: 1fr;
+  }
+  .eod-builder-field {
+    grid-template-columns: 1fr;
+  }
+  .eod-builder-section-head {
+    align-items: flex-start;
+  }
+  .eod-builder-footer .primary-btn {
+    width: 100%;
+    margin-left: 0;
   }
   .autopilot-master {
     align-items: flex-start;

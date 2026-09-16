@@ -3,17 +3,35 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Bot,
   CalendarDays,
   ClipboardCheck,
   LoaderCircle,
   Medal,
+  Plus,
   RefreshCw,
   Save,
   ShieldCheck,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import {
+  blankEodAnswers,
+  cloneDefaultEodSchema,
+  DEFAULT_EOD_FORM_SCHEMA,
+  EOD_FIELD_TYPES,
+  eodAnswersFromRow,
+  type EodAnswers,
+  type EodField,
+  type EodFormSchema,
+  isCoreEodField,
+  normalizeEodSchema,
+  serializeEodAnswers,
+} from "@/lib/eod-schema";
+import { EodDynamicFields } from "./EodDynamicForm";
 
 export type SalesWorkspaceModule =
   | "responsibilities"
@@ -495,9 +513,10 @@ function InstructionsPanel({ isDemo }: { isDemo: boolean }) {
           leads_digest_send_time: "16:30",
           morale_send_time: "17:00",
           coaching_send_time: "16:00",
-          eod_enforce_delay_minutes: 30,
           eod_link_template: "Please complete today's EOD report: {url}",
+          eod_form_schema: DEFAULT_EOD_FORM_SCHEMA,
         },
+        membership: { role: "owner" },
       });
       return;
     }
@@ -521,7 +540,6 @@ function InstructionsPanel({ isDemo }: { isDemo: boolean }) {
     values.daily_appointment_target = Number(values.daily_appointment_target);
     values.crm_stuck_days = Number(values.crm_stuck_days);
     values.crm_wait_minutes = Number(values.crm_wait_minutes);
-    values.eod_enforce_delay_minutes = Number(values.eod_enforce_delay_minutes);
     values.eod_enforce_delay_minutes = Number(values.eod_enforce_delay_minutes);
     if (isDemo) {
       setNotice("Demo instructions saved.");
@@ -635,17 +653,6 @@ function InstructionsPanel({ isDemo }: { isDemo: boolean }) {
               />
             </label>
             <label>
-              EOD chase delay (minutes)
-              <input
-                required
-                type="number"
-                min="0"
-                max="720"
-                name="eod_enforce_delay_minutes"
-                defaultValue={Number(settings.eod_enforce_delay_minutes ?? 30)}
-              />
-            </label>
-            <label>
               Morning briefing time
               <input
                 required
@@ -711,7 +718,206 @@ function InstructionsPanel({ isDemo }: { isDemo: boolean }) {
           </button>
         </form>
       </article>
+      {(isDemo || state.membership?.role === "owner") && (
+        <EodFormBuilder
+          key={String(settings.updated_at ?? "eod-builder")}
+          initialSchema={normalizeEodSchema(settings.eod_form_schema)}
+          isDemo={isDemo}
+          onSaved={load}
+        />
+      )}
     </section>
+  );
+}
+
+function EodFormBuilder({
+  initialSchema,
+  isDemo,
+  onSaved,
+}: {
+  initialSchema: EodFormSchema;
+  isDemo: boolean;
+  onSaved: () => Promise<void>;
+}) {
+  const [schema, setSchema] = useState(() => normalizeEodSchema(initialSchema));
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  function updateSection(index: number, patch: Partial<EodFormSchema["sections"][number]>) {
+    setSchema((current) => ({
+      ...current,
+      sections: current.sections.map((section, sectionIndex) =>
+        sectionIndex === index ? { ...section, ...patch } : section
+      ),
+    }));
+  }
+
+  function updateField(sectionIndex: number, fieldIndex: number, patch: Partial<EodField>) {
+    setSchema((current) => ({
+      ...current,
+      sections: current.sections.map((section, currentSection) =>
+        currentSection === sectionIndex
+          ? {
+              ...section,
+              fields: section.fields.map((field, currentField) =>
+                currentField === fieldIndex ? { ...field, ...patch } : field
+              ),
+            }
+          : section
+      ),
+    }));
+  }
+
+  function moveSection(index: number, direction: -1 | 1) {
+    setSchema((current) => {
+      const sections = [...current.sections];
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= sections.length) return current;
+      [sections[index], sections[nextIndex]] = [sections[nextIndex], sections[index]];
+      return { ...current, sections };
+    });
+  }
+
+  function moveField(sectionIndex: number, fieldIndex: number, direction: -1 | 1) {
+    setSchema((current) => ({
+      ...current,
+      sections: current.sections.map((section, currentSection) => {
+        if (currentSection !== sectionIndex) return section;
+        const fields = [...section.fields];
+        const nextIndex = fieldIndex + direction;
+        if (nextIndex < 0 || nextIndex >= fields.length) return section;
+        [fields[fieldIndex], fields[nextIndex]] = [fields[nextIndex], fields[fieldIndex]];
+        return { ...section, fields };
+      }),
+    }));
+  }
+
+  async function save() {
+    const normalized = normalizeEodSchema(schema);
+    setSchema(normalized);
+    if (isDemo) {
+      setNotice("Demo EOD form saved for this preview.");
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      await saveSettings({ eod_form_schema: normalized });
+      setNotice("EOD form customization saved for the team and private links.");
+      await onSaved();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The EOD form could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <article className="panel eod-builder">
+      <div className="panel-head">
+        <div>
+          <span className="eyebrow">EOD FORM BUILDER</span>
+          <h3>Customize the team&apos;s report</h3>
+          <p>
+            This one template controls the signed-in report and every private EOD link.
+            Core sales metrics continue feeding reporting and leaderboards.
+          </p>
+        </div>
+      </div>
+      {notice && <p className="inline-notice">{notice}</p>}
+      <div className="form-stack flush">
+        <div className="form-grid">
+          <label>
+            Report title
+            <input value={schema.title} onChange={(event) => setSchema((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+          <label>
+            Intro message
+            <input value={schema.description} onChange={(event) => setSchema((current) => ({ ...current, description: event.target.value }))} />
+          </label>
+        </div>
+        <div className="eod-builder-sections">
+          {schema.sections.map((section, sectionIndex) => (
+            <div className="eod-builder-section" key={section.id}>
+              <div className="eod-builder-section-head">
+                <input aria-label="Section title" value={section.title} onChange={(event) => updateSection(sectionIndex, { title: event.target.value })} />
+                <div className="eod-builder-actions">
+                  <button type="button" title="Move section up" onClick={() => moveSection(sectionIndex, -1)} disabled={sectionIndex === 0}><ArrowUp size={14} /></button>
+                  <button type="button" title="Move section down" onClick={() => moveSection(sectionIndex, 1)} disabled={sectionIndex === schema.sections.length - 1}><ArrowDown size={14} /></button>
+                  <button type="button" title="Remove section" onClick={() => setSchema((current) => ({ ...current, sections: current.sections.filter((_, index) => index !== sectionIndex) }))} disabled={schema.sections.length === 1}><Trash2 size={14} /></button>
+                </div>
+              </div>
+              <input
+                className="eod-section-description"
+                aria-label="Section description"
+                placeholder="Optional section guidance"
+                value={section.description ?? ""}
+                onChange={(event) => updateSection(sectionIndex, { description: event.target.value })}
+              />
+              <div className="eod-builder-fields">
+                {section.fields.map((field, fieldIndex) => (
+                  <div className="eod-builder-field" key={field.id}>
+                    <label>
+                      Question label
+                      <input value={field.label} onChange={(event) => updateField(sectionIndex, fieldIndex, { label: event.target.value })} />
+                    </label>
+                    <label>
+                      Answer type
+                      <select value={field.type} disabled={isCoreEodField(field.id)} onChange={(event) => updateField(sectionIndex, fieldIndex, { type: event.target.value as EodField["type"] })}>
+                        {EOD_FIELD_TYPES.map((type) => <option value={type.value} key={type.value}>{type.label}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      Placeholder
+                      <input value={field.placeholder ?? ""} onChange={(event) => updateField(sectionIndex, fieldIndex, { placeholder: event.target.value })} />
+                    </label>
+                    {field.type === "select" && !isCoreEodField(field.id) && (
+                      <label>
+                        Options (comma-separated)
+                        <input value={(field.options ?? []).join(", ")} onChange={(event) => updateField(sectionIndex, fieldIndex, { options: event.target.value.split(",").map((option) => option.trim()).filter(Boolean) })} />
+                      </label>
+                    )}
+                    <label className="check-label">
+                      <input type="checkbox" checked={field.required === true} onChange={(event) => updateField(sectionIndex, fieldIndex, { required: event.target.checked })} /> Required
+                    </label>
+                    <div className="eod-builder-actions">
+                      <button type="button" title="Move question up" onClick={() => moveField(sectionIndex, fieldIndex, -1)} disabled={fieldIndex === 0}><ArrowUp size={14} /></button>
+                      <button type="button" title="Move question down" onClick={() => moveField(sectionIndex, fieldIndex, 1)} disabled={fieldIndex === section.fields.length - 1}><ArrowDown size={14} /></button>
+                      <button type="button" title="Remove question" onClick={() => updateSection(sectionIndex, { fields: section.fields.filter((_, index) => index !== fieldIndex) })} disabled={section.fields.length === 1}><Trash2 size={14} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <button
+                className="quiet-btn"
+                type="button"
+                onClick={() => updateSection(sectionIndex, {
+                  fields: [...section.fields, { id: `custom_${crypto.randomUUID().replaceAll("-", "")}`, label: "New question", type: "short_text" }],
+                })}
+              ><Plus size={14} /> Add question</button>
+            </div>
+          ))}
+        </div>
+        <div className="eod-builder-footer">
+          <button
+            className="quiet-btn"
+            type="button"
+            onClick={() => setSchema((current) => ({
+              ...current,
+              sections: [...current.sections, {
+                id: `section_${crypto.randomUUID().replaceAll("-", "")}`,
+                title: "New section",
+                fields: [{ id: `custom_${crypto.randomUUID().replaceAll("-", "")}`, label: "New question", type: "short_text" }],
+              }],
+            }))}
+          ><Plus size={14} /> Add section</button>
+          <button className="quiet-btn" type="button" onClick={() => setSchema(cloneDefaultEodSchema())}>Restore reference template</button>
+          <button className="primary-btn" type="button" disabled={busy} onClick={() => void save()}>
+            {busy ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} Save EOD form
+          </button>
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -1176,61 +1382,47 @@ function CallGradingPanel({ isDemo }: { isDemo: boolean }) {
   );
 }
 
-type EodForm = {
-  report_date: string;
-  calls_taken: string;
-  connects: string;
-  appointments_set: string;
-  closes: string;
-  revenue: string;
-  mood: string;
-  wins: string;
-  blockers: string;
-  priorities: string;
-  help_needed: string;
-  crm_updated: boolean;
-};
-const freshEod = (): EodForm => ({
-  report_date: new Date().toISOString().slice(0, 10),
-  calls_taken: "0",
-  connects: "0",
-  appointments_set: "0",
-  closes: "0",
-  revenue: "0",
-  mood: "good",
-  wins: "",
-  blockers: "",
-  priorities: "",
-  help_needed: "",
-  crm_updated: false,
-});
-
 function EodReportPanel({ isDemo }: { isDemo: boolean }) {
-  const [form, setForm] = useState<EodForm>(freshEod);
+  const [schema, setSchema] = useState<EodFormSchema>(() => cloneDefaultEodSchema());
+  const [reportDate, setReportDate] = useState(new Date().toISOString().slice(0, 10));
+  const [answers, setAnswers] = useState<EodAnswers>(() => blankEodAnswers(DEFAULT_EOD_FORM_SCHEMA));
   const [history, setHistory] = useState<Row[]>(isDemo ? demoEods : []);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const load = useCallback(async () => {
-    if (isDemo || !supabase) return;
+    if (isDemo) {
+      const nextSchema = cloneDefaultEodSchema();
+      setSchema(nextSchema);
+      setAnswers((current) => Object.keys(current).length ? current : blankEodAnswers(nextSchema));
+      return;
+    }
+    if (!supabase) return;
     setBusy(true);
-    const { data, error } = await supabase
-      .from("sales_eod_reports")
-      .select("*")
-      .order("report_date", { ascending: false })
-      .limit(60);
-    setBusy(false);
-    if (error) setNotice(error.message);
-    else setHistory(data ?? []);
-  }, [isDemo]);
+    try {
+      const [workspace, reports] = await Promise.all([
+        salesState(),
+        supabase.from("sales_eod_reports").select("*").order("report_date", { ascending: false }).limit(60),
+      ]);
+      if (reports.error) throw reports.error;
+      const nextSchema = normalizeEodSchema(workspace.settings?.eod_form_schema);
+      const rows = reports.data ?? [];
+      setSchema(nextSchema);
+      setHistory(rows);
+      const current = rows.find((row) => String(row.report_date) === reportDate);
+      setAnswers(current ? eodAnswersFromRow(nextSchema, current) : blankEodAnswers(nextSchema));
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The EOD report could not be loaded.");
+    } finally {
+      setBusy(false);
+    }
+  }, [isDemo, reportDate]);
   useEffect(() => {
     queueMicrotask(() => void load());
   }, [load]);
-  function setField(key: keyof EodForm, value: string | boolean) {
-    setForm((current) => ({ ...current, [key]: value }));
-  }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (Number(form.closes) > Number(form.calls_taken)) {
+    const submission = serializeEodAnswers(schema, answers);
+    if (Number(answers.closes ?? 0) > Number(answers.calls_taken ?? 0)) {
       setNotice("Closes cannot exceed calls taken.");
       return;
     }
@@ -1249,18 +1441,9 @@ function EodReportPanel({ isDemo }: { isDemo: boolean }) {
     const { error } = await supabase.from("sales_eod_reports").upsert(
       {
         user_id: userId,
-        report_date: form.report_date,
-        calls_taken: Number(form.calls_taken),
-        connects: Number(form.connects),
-        appointments_set: Number(form.appointments_set),
-        closes: Number(form.closes),
-        revenue: Number(form.revenue),
-        mood: form.mood,
-        wins: form.wins,
-        blockers: form.blockers,
-        priorities: form.priorities,
-        help_needed: form.help_needed,
-        crm_updated: form.crm_updated,
+        report_date: reportDate,
+        ...submission.core,
+        custom_answers: submission.customAnswers,
         submitted_via: "app",
       },
       { onConflict: "user_id,report_date" },
@@ -1273,28 +1456,16 @@ function EodReportPanel({ isDemo }: { isDemo: boolean }) {
     }
   }
   function edit(row: Row) {
-    setForm({
-      report_date: String(row.report_date),
-      calls_taken: String(row.calls_taken ?? 0),
-      connects: String(row.connects ?? 0),
-      appointments_set: String(row.appointments_set ?? 0),
-      closes: String(row.closes ?? 0),
-      revenue: String(row.revenue ?? 0),
-      mood: String(row.mood ?? "good"),
-      wins: String(row.wins ?? ""),
-      blockers: String(row.blockers ?? ""),
-      priorities: String(row.priorities ?? ""),
-      help_needed: String(row.help_needed ?? ""),
-      crm_updated: Boolean(row.crm_updated),
-    });
+    setReportDate(String(row.report_date));
+    setAnswers(eodAnswersFromRow(schema, row));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   return (
     <section>
       <ModuleHeading
         eyebrow="EOD REPORT"
-        title={`Close out ${form.report_date}.`}
-        detail="Log activity, outcomes, lessons, CRM completion, and tomorrow's first move. Saving the same date updates that report."
+        title={schema.title}
+        detail={schema.description || "Saving the same date updates that report."}
       />
       {notice && <p className="inline-notice">{notice}</p>}
       <article className="panel">
@@ -1305,115 +1476,21 @@ function EodReportPanel({ isDemo }: { isDemo: boolean }) {
               <input
                 type="date"
                 required
-                value={form.report_date}
-                onChange={(e) => setField("report_date", e.target.value)}
+                value={reportDate}
+                onChange={(event) => {
+                  const nextDate = event.target.value;
+                  setReportDate(nextDate);
+                  const saved = history.find((row) => String(row.report_date) === nextDate);
+                  setAnswers(saved ? eodAnswersFromRow(schema, saved) : blankEodAnswers(schema));
+                }}
               />
-            </label>
-            <label>
-              Calls taken
-              <input
-                type="number"
-                min="0"
-                required
-                value={form.calls_taken}
-                onChange={(e) => setField("calls_taken", e.target.value)}
-              />
-            </label>
-            <label>
-              Connects
-              <input
-                type="number"
-                min="0"
-                required
-                value={form.connects}
-                onChange={(e) => setField("connects", e.target.value)}
-              />
-            </label>
-            <label>
-              Appointments set
-              <input
-                type="number"
-                min="0"
-                required
-                value={form.appointments_set}
-                onChange={(e) => setField("appointments_set", e.target.value)}
-              />
-            </label>
-            <label>
-              Closes
-              <input
-                type="number"
-                min="0"
-                required
-                value={form.closes}
-                onChange={(e) => setField("closes", e.target.value)}
-              />
-            </label>
-            <label>
-              Revenue collected
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                required
-                value={form.revenue}
-                onChange={(e) => setField("revenue", e.target.value)}
-              />
-            </label>
-            <label>
-              Mood
-              <select
-                value={form.mood}
-                onChange={(e) => setField("mood", e.target.value)}
-              >
-                <option value="great">Great</option>
-                <option value="good">Good</option>
-                <option value="neutral">Neutral</option>
-                <option value="tough">Tough</option>
-                <option value="blocked">Blocked</option>
-              </select>
             </label>
           </div>
-          <label>
-            Wins
-            <textarea
-              value={form.wins}
-              onChange={(e) => setField("wins", e.target.value)}
-              placeholder="What moved forward today?"
-            />
-          </label>
-          <label>
-            Blockers and losses
-            <textarea
-              value={form.blockers}
-              onChange={(e) => setField("blockers", e.target.value)}
-              placeholder="What slowed execution or needs escalation?"
-            />
-          </label>
-          <label>
-            Tomorrow&apos;s priorities
-            <textarea
-              value={form.priorities}
-              onChange={(e) => setField("priorities", e.target.value)}
-              placeholder="Name the first concrete moves for tomorrow."
-            />
-          </label>
-          <label>
-            Help needed
-            <textarea
-              value={form.help_needed}
-              onChange={(e) => setField("help_needed", e.target.value)}
-              placeholder="Coaching, access, pricing, fulfillment, or manager support..."
-            />
-          </label>
-          <label className="check-label">
-            <input
-              type="checkbox"
-              checked={form.crm_updated}
-              onChange={(e) => setField("crm_updated", e.target.checked)}
-            />{" "}
-            CRM is fully updated with stages, notes, and next actions
-          </label>
+          <EodDynamicFields
+            schema={schema}
+            answers={answers}
+            onChange={(fieldId, value) => setAnswers((current) => ({ ...current, [fieldId]: value }))}
+          />
           <button className="primary-btn" disabled={busy}>
             {busy ? (
               <LoaderCircle className="spin" size={16} />
@@ -1482,6 +1559,7 @@ function EodDashboardPanel({ isDemo }: { isDemo: boolean }) {
   const [periodDays, setPeriodDays] = useState(7);
   const [roster, setRoster] = useState<Row[]>(isDemo ? demoRoster : []);
   const [daily, setDaily] = useState<Row[]>(isDemo ? demoEods : []);
+  const [schema, setSchema] = useState<EodFormSchema>(() => cloneDefaultEodSchema());
   const [weights, setWeights] = useState<Weights>(defaultWeights);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -1498,6 +1576,7 @@ function EodDashboardPanel({ isDemo }: { isDemo: boolean }) {
       if (data?.error) throw new Error(String(data.error));
       setRoster(Array.isArray(data.roster) ? data.roster : []);
       setDaily(Array.isArray(data.daily) ? data.daily : []);
+      setSchema(normalizeEodSchema(data.eodFormSchema));
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -1514,6 +1593,10 @@ function EodDashboardPanel({ isDemo }: { isDemo: boolean }) {
   const board = useMemo(
     () => buildLeaderboard(roster, weights),
     [roster, weights],
+  );
+  const reportFields = useMemo(
+    () => schema.sections.flatMap((section) => section.fields),
+    [schema],
   );
   const leaders = [
     { label: "Revenue leader", metric: "reported_revenue", suffix: "cash" },
@@ -1671,16 +1754,20 @@ function EodDashboardPanel({ isDemo }: { isDemo: boolean }) {
               </span>
               <strong>{money(row.revenue)}</strong>
             </summary>
-            <div>
-              <p>
-                <b>Wins:</b> {String(row.wins || "None logged")}
-              </p>
-              <p>
-                <b>Blockers:</b> {String(row.blockers || "None logged")}
-              </p>
-              <p>
-                <b>Priorities:</b> {String(row.priorities || "None logged")}
-              </p>
+            <div className="eod-answer-grid">
+              {reportFields.map((field) => {
+                const custom = row.custom_answers && typeof row.custom_answers === "object"
+                  ? row.custom_answers as Row
+                  : {};
+                const raw = isCoreEodField(field.id) ? row[field.id] : custom[field.id];
+                if (raw === "" || raw === null || raw === undefined) return null;
+                const value = field.type === "checkbox"
+                  ? raw ? "Yes" : "No"
+                  : field.type === "currency"
+                    ? money(raw)
+                    : String(raw);
+                return <p key={field.id}><b>{field.label}:</b> {value}</p>;
+              })}
             </div>
           </details>
         ))}

@@ -158,6 +158,18 @@ Deno.serve(async (req) => {
         return json({ error: "Enter a valid IANA timezone." }, 400);
       }
     }
+    if ("eod_form_schema" in body) {
+      const schema = body.eod_form_schema;
+      if (
+        !schema ||
+        typeof schema !== "object" ||
+        Array.isArray(schema) ||
+        !Array.isArray((schema as Record<string, unknown>).sections) ||
+        JSON.stringify(schema).length > 100000
+      ) {
+        return json({ error: "Enter a valid EOD form with at least one section." }, 400);
+      }
+    }
     const allowed = [
       "instructions",
       "soul",
@@ -175,6 +187,7 @@ Deno.serve(async (req) => {
       "morale_send_time",
       "coaching_send_time",
       "eod_enforce_delay_minutes",
+      "eod_form_schema",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) if (key in body) patch[key] = body[key];

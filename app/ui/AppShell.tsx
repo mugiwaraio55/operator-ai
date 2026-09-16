@@ -917,7 +917,7 @@ export function AppShell() {
                 <SalesOverview
                   calls={calls}
                   recommendations={salesRecommendations}
-                  onEod={() => setModal("eod")}
+                  onEod={() => setView("eod-report")}
                 />
               ) : (
                 <MediaOverview

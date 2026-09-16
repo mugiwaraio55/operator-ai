@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
     .map((row) => row.member_user_id);
   const since = new Date(Date.now() - periodDays * 86400000).toISOString();
   const sinceDate = since.slice(0, 10);
-  const [calls, eods, grades, appointments, coaching] = await Promise.all([
+  const [calls, eods, grades, appointments, coaching, settings] = await Promise.all([
     admin
       .from("sales_calls")
       .select("user_id,outcome,score,revenue,happened_at")
@@ -42,7 +42,7 @@ Deno.serve(async (req) => {
     admin
       .from("sales_eod_reports")
       .select(
-        "id,user_id,report_date,calls_taken,connects,appointments_set,closes,revenue,mood,crm_updated,wins,blockers,priorities,help_needed",
+        "id,user_id,report_date,calls_taken,connects,appointments_set,closes,revenue,mood,crm_updated,wins,blockers,priorities,help_needed,custom_answers",
       )
       .in("user_id", ids)
       .gte("report_date", sinceDate),
@@ -62,9 +62,14 @@ Deno.serve(async (req) => {
       .eq("user_id", user.id)
       .order("week_start", { ascending: false })
       .limit(1),
+    admin
+      .from("sales_manager_settings")
+      .select("eod_form_schema")
+      .eq("user_id", user.id)
+      .maybeSingle(),
   ]);
   const queryError = calls.error ?? eods.error ?? grades.error ??
-    appointments.error ?? coaching.error;
+    appointments.error ?? coaching.error ?? settings.error;
   if (queryError) return json({ error: queryError.message }, 500);
   const roster = (members ?? []).map((member) => {
     const memberCalls = (calls.data ?? []).filter(
@@ -146,6 +151,7 @@ Deno.serve(async (req) => {
     ok: true,
     periodDays,
     period: { from: sinceDate, to: new Date().toISOString().slice(0, 10) },
+    eodFormSchema: settings.data?.eod_form_schema ?? null,
     roster,
     daily: (eods.data ?? [])
       .map((report) => {

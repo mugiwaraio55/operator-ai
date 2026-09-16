@@ -27,6 +27,8 @@ Open `http://localhost:3000`. Leave the placeholder Supabase values in place to 
    2. `supabase/ai_sales_manager.sql`
    3. `supabase/ai_media_buyer.sql`
 
+   Existing installations can apply `supabase/migrations/20260916172508_customizable_eod_forms.sql` instead of rerunning the full sales-manager script.
+
 3. In **Authentication > URL Configuration**, add `http://localhost:3000` and the eventual production URL as redirect URLs.
 4. Put the browser-safe values in `.env.local`:
 
@@ -138,7 +140,7 @@ The Sales Manager workspace includes every operating area from the original Char
 - **Sales Process**, **The Offer**, and **Industry Knowledge** are private editable operating documents that Charles uses as context.
 - **Call Reporting** combines EOD call activity, conversion movement, AI call quality, and CRM compliance into a seven-day team report.
 - **Call Grading** accepts manual transcripts and displays automatic Fathom/GHL grades, category scores, script adherence, strengths, improvements, and coaching notes.
-- **EOD Report** saves or edits the signed-in rep’s calls, connects, appointments, closes, revenue, mood, wins, blockers, priorities, support needs, and CRM completion.
+- **EOD Report** uses an owner-configurable, sectioned template shared by the signed-in form and private EOD links. Owners can rename, reorder, add, remove, and require questions; the default mirrors the reference project’s activity, pipeline, results, objection, reflection, tomorrow, and CRM sections.
 - **EOD Dashboard / Leaderboard** supports 24-hour, 7-day, 30-day, and 90-day views; category leaders; adjustable weighting; and rankings for closes, revenue, close rate, appointments, call quality, and CRM compliance.
 - **Appointments** syncs GoHighLevel and lets the record owner save booking status, sales outcome, revenue, summary, objections, follow-up time, and next steps.
 - **Integrations** configures ClickUp, GoHighLevel, Fathom, Meta, the AI provider, and tokenized webhook URLs.
