@@ -1,6 +1,7 @@
 import { adminClient, corsHeaders, json } from "../_shared/supabase.ts";
 import {
   createClickUpTask,
+  deliverSalesMessage,
   ghlCredentials,
   ghlFetch,
 } from "../_shared/sales.ts";
@@ -15,6 +16,10 @@ const modes = new Set([
   "eodEnforce",
   "eodLink",
   "coaching",
+  "appointments",
+  "accountability",
+  "commandReport",
+  "transition",
 ]);
 
 Deno.serve(async (req) => {
@@ -98,6 +103,88 @@ async function runMode(
     ) return { created: false, reason: "before_coaching_time" };
   }
   if (mode === "scan") return scanReminders(admin, ownerId);
+  if (mode === "appointments") {
+    const start = new Date(`${today}T00:00:00Z`).toISOString();
+    const end = new Date(`${today}T23:59:59Z`).toISOString();
+    const [{ count }, memberIds] = await Promise.all([
+      admin.from("sales_appointments").select("id", { count: "exact", head: true })
+        .eq("user_id", ownerId).gte("scheduled_at", start).lte("scheduled_at", end),
+      activeMemberIds(admin, ownerId),
+    ]);
+    const target = Number(settings.daily_appointment_target ?? 8) * Math.max(1, memberIds.length - 1);
+    if ((count ?? 0) >= target) return { created: false, reason: "target_met", appointments: count, target };
+    return deliverOnce(admin, ownerId, mode, today, "Charles appointment pacing alert",
+      `## Appointment target at risk\n\n- Booked today: ${count ?? 0}\n- Team target: ${target}\n- Gap: ${Math.max(0, target - (count ?? 0))}\n\nAssign the gap by rep and protect the next outreach block.`);
+  }
+  if (mode === "accountability") {
+    const now = Date.now();
+    const { data: appointments } = await admin.from("sales_appointments")
+      .select("id,prospect_name,scheduled_at,outcome,assigned_user_email,assigned_user_name")
+      .eq("user_id", ownerId).eq("outcome", "pending")
+      .lte("scheduled_at", new Date(now).toISOString())
+      .gte("scheduled_at", new Date(now - 3 * 3600000).toISOString()).limit(100);
+    const { data: members } = await admin.from("charles_account_members")
+      .select("member_user_id,invited_email,display_name,slack_user_id").eq("owner_user_id", ownerId).eq("is_active", true);
+    let sent = 0;
+    for (const appointment of appointments ?? []) {
+      const elapsed = Math.max(0, Math.floor((now - Date.parse(appointment.scheduled_at)) / 60000));
+      const cadence = [60, 30, 10, 0].find((minute) => elapsed >= minute) ?? 0;
+      const rep = (members ?? []).find((member) =>
+        member.invited_email?.toLowerCase() === appointment.assigned_user_email?.toLowerCase() ||
+        member.display_name?.toLowerCase() === appointment.assigned_user_name?.toLowerCase());
+      const { data: inserted } = await admin.from("sales_accountability_events").insert({
+        user_id: ownerId, rep_user_id: rep?.member_user_id ?? null, appointment_id: appointment.id,
+        cadence_minutes: cadence, event_kind: cadence ? "disposition_overdue" : "appointment_reminder",
+        detail: { prospect: appointment.prospect_name, scheduled_at: appointment.scheduled_at },
+      }).select("id").maybeSingle();
+      if (!inserted) continue;
+      const delivery = await deliverSalesMessage(admin, ownerId, "accountability",
+        cadence ? "Appointment disposition overdue" : "Appointment follow-up due",
+        `Update the outcome, notes, objections, revenue, and exact next step for **${appointment.prospect_name ?? "this appointment"}**.`,
+        rep?.slack_user_id);
+      await admin.from("sales_accountability_events").update({
+        delivery_status: delivery.ok ? "sent" : "failed", delivered_at: delivery.ok ? new Date().toISOString() : null,
+      }).eq("id", inserted.id);
+      if (delivery.ok) sent++;
+    }
+    return { sent, checked: appointments?.length ?? 0 };
+  }
+  if (mode === "commandReport") {
+    if (!scheduleReached(timeZone, String(settings.command_report_send_time ?? "17:30"))) {
+      return { created: false, reason: "before_command_report_time" };
+    }
+    const memberIds = await activeMemberIds(admin, ownerId);
+    const start = `${today}T00:00:00Z`;
+    const [{ data: reports }, { data: calls }, { data: appointments }] = await Promise.all([
+      admin.from("sales_eod_reports").select("user_id,calls_taken,connects,appointments_set,closes,revenue,mood,blockers,help_needed").in("user_id", memberIds).eq("report_date", today),
+      admin.from("sales_call_gradings").select("user_id,overall_score,status").in("user_id", memberIds).gte("created_at", start),
+      admin.from("sales_appointments").select("id,outcome,revenue").eq("user_id", ownerId).gte("scheduled_at", start),
+    ]);
+    const metrics = {
+      eod_submitted: reports?.length ?? 0, team_members: memberIds.length,
+      appointments: appointments?.length ?? 0,
+      appointments_pending: (appointments ?? []).filter((row) => row.outcome === "pending").length,
+      closes: (reports ?? []).reduce((sum, row) => sum + Number(row.closes ?? 0), 0),
+      revenue: (reports ?? []).reduce((sum, row) => sum + Number(row.revenue ?? 0), 0),
+      graded_calls: (calls ?? []).filter((row) => ["completed", "graded"].includes(row.status)).length,
+      average_call_score: calls?.length ? Math.round((calls ?? []).reduce((sum, row) => sum + Number(row.overall_score ?? 0), 0) / calls.length) : 0,
+    };
+    const summary = `${metrics.closes} closes · $${metrics.revenue.toFixed(0)} collected · ${metrics.eod_submitted}/${metrics.team_members} EODs · ${metrics.appointments_pending} dispositions pending.`;
+    await admin.from("sales_command_reports").upsert({ user_id: ownerId, report_date: today, metrics, per_rep: reports ?? [], summary }, { onConflict: "user_id,report_date" });
+    return deliverOnce(admin, ownerId, mode, today, `Daily Sales Command Report · ${today}`, `## Executive summary\n\n${summary}\n\n## Risks\n\n- ${(reports ?? []).filter((row) => row.blockers || row.help_needed).length} reps reported blockers or need help.\n- ${metrics.appointments_pending} appointment outcomes remain unreported.`);
+  }
+  if (mode === "transition") {
+    await refreshOpportunities(admin, ownerId);
+    const { data: won } = await admin.from("sales_opportunities")
+      .select("id,name,assigned_to,updated_at").eq("user_id", ownerId).eq("status", "won").gte("updated_at", new Date(Date.now() - 14 * 86400000).toISOString());
+    if (!won?.length) return { created: false, reason: "no_new_wins" };
+    await admin.from("sales_client_transitions").upsert(won.map((row) => ({
+      user_id: ownerId, opportunity_id: row.id, client_name: row.name,
+      due_at: new Date(Date.now() + 2 * 86400000).toISOString(),
+    })), { onConflict: "user_id,opportunity_id", ignoreDuplicates: true });
+    return deliverOnce(admin, ownerId, mode, today, "New-client transition review",
+      `## ${won.length} recent wins need a clean handoff\n\n${won.map((row) => `- ${row.name}: confirm payment, agreement, onboarding, handoff, and CRM completion.`).join("\n")}`);
+  }
   if (mode === "crm" || mode === "dropball" || mode === "leadsdigest") {
     await refreshOpportunities(admin, ownerId);
   }
@@ -184,7 +271,7 @@ async function runMode(
     const [{ data: appts }, { data: opps }] = await Promise.all([
       admin
         .from("sales_appointments")
-        .select("prospect_name,scheduled_at,status")
+        .select("prospect_name,scheduled_at,status,assigned_user_email,assigned_user_name")
         .eq("user_id", ownerId)
         .gte("scheduled_at", start)
         .lte("scheduled_at", end)
@@ -210,6 +297,19 @@ async function runMode(
         (row) => `- ${row.name}: $${Number(row.monetary_value).toFixed(0)}`,
       )
       .join("\n") || "- No open opportunities synced";
+    const { data: reps } = await admin.from("charles_account_members")
+      .select("member_user_id,display_name,invited_email,slack_user_id")
+      .eq("owner_user_id", ownerId).eq("is_active", true).eq("role", "sales_rep");
+    if (reps?.length) {
+      let sent = 0;
+      for (const rep of reps) {
+        const own = (appts ?? []).filter((row) => row.assigned_user_email?.toLowerCase() === rep.invited_email?.toLowerCase() || row.assigned_user_name?.toLowerCase() === rep.display_name?.toLowerCase());
+        const lines = own.map((row) => `- ${row.scheduled_at}: ${row.prospect_name ?? "Appointment"} (${row.status})`).join("\n") || "- No assigned appointments today";
+        const result = await deliverOnce(admin, ownerId, mode, `${today}:${rep.member_user_id}`, `Charles morning briefing · ${rep.display_name ?? rep.invited_email ?? "Rep"}`, `## Your appointments\n${lines}\n\n## Team priority pipeline\n${opportunityLines}`, rep.slack_user_id);
+        if (result.created) sent++;
+      }
+      return { created: sent > 0, sent };
+    }
     return deliverOnce(
       admin,
       ownerId,
@@ -235,7 +335,7 @@ async function runMode(
     }
     const { data: members } = await admin
       .from("charles_account_members")
-      .select("member_user_id,display_name,invited_email,eod_token")
+      .select("member_user_id,display_name,invited_email,eod_token,slack_user_id")
       .eq("owner_user_id", ownerId)
       .eq("is_active", true)
       .eq("role", "sales_rep");
@@ -257,6 +357,16 @@ async function runMode(
       };
     }
     const origin = (Deno.env.get("APP_ORIGIN") ?? "").replace(/\/$/, "");
+    if (recipients.length) {
+      let sent = 0;
+      for (const row of recipients) {
+        const url = `${origin}/eod/${row.eod_token}`;
+        const message = mode === "eodLink" ? String(settings.eod_link_template ?? "Please complete today's EOD report: {url}").replaceAll("{url}", url) : `Your EOD report is overdue. Complete it now: ${url}`;
+        const result = await deliverOnce(admin, ownerId, mode, `${today}:${row.member_user_id}`, mode === "eodEnforce" ? "Charles EOD follow-up" : "Charles EOD report", `## ${row.display_name ?? row.invited_email ?? "Sales rep"}\n\n${message}`, row.slack_user_id);
+        if (result.created) sent++;
+      }
+      return { created: sent > 0, sent };
+    }
     const links = recipients
       .map((row) => {
         const url = `${origin}/eod/${row.eod_token}`;
@@ -396,6 +506,7 @@ async function deliverOnce(
   key: string,
   title: string,
   markdown: string,
+  slackRecipient?: string | null,
 ) {
   const { data: existing } = await admin
     .from("charles_reminders")
@@ -424,26 +535,21 @@ async function deliverOnce(
     if (error) return { created: false, error: error.message };
     id = data.id;
   }
-  const delivered = await createClickUpTask(
-    admin,
-    ownerId,
-    "sales_brief",
-    title,
-    markdown,
-  );
+  const mappedKind = kind === "commandReport" ? "command_report" : kind === "eodEnforce" || kind === "eodLink" ? "eod" : kind === "transition" ? "transition" : kind === "accountability" ? "accountability" : kind === "coaching" ? "coaching" : "sales_brief";
+  const delivered = await deliverSalesMessage(admin, ownerId, mappedKind, title, markdown, slackRecipient);
   if (delivered.ok) {
     await admin
       .from("charles_reminders")
       .update({
         fired_at: new Date().toISOString(),
-        clickup_task_id: delivered.taskId ?? null,
+        clickup_task_id: null,
       })
       .eq("id", id);
   }
   return {
     created: delivered.ok,
-    taskUrl: delivered.taskUrl,
-    error: delivered.ok ? undefined : delivered.error,
+    taskUrl: null,
+    error: delivered.ok ? undefined : "No configured delivery channel accepted the message.",
   };
 }
 

@@ -35,7 +35,7 @@ create table if not exists public.app_settings (
 
 create table if not exists public.integration_connections (
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('clickup', 'meta', 'ghl', 'ai', 'fathom')),
+  provider text not null check (provider in ('clickup', 'meta', 'ghl', 'ai', 'fathom', 'slack')),
   status text not null default 'connected' check (status in ('connected', 'disconnected', 'error')),
   account_id text,
   account_name text,
@@ -48,7 +48,7 @@ create table if not exists public.integration_connections (
 
 create table if not exists private.integration_secret_refs (
   user_id uuid not null references auth.users(id) on delete cascade,
-  provider text not null check (provider in ('clickup', 'meta', 'ghl', 'ai', 'fathom')),
+  provider text not null check (provider in ('clickup', 'meta', 'ghl', 'ai', 'fathom', 'slack')),
   secret_id uuid not null,
   updated_at timestamptz not null default now(),
   primary key (user_id, provider),
@@ -155,7 +155,7 @@ create table if not exists public.clickup_task_deliveries (
   id bigint generated always as identity primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   list_id text not null,
-  task_kind text not null check (task_kind in ('sales_brief', 'media_brief', 'test')),
+  task_kind text not null check (task_kind in ('sales_brief', 'media_brief', 'test', 'accountability', 'eod', 'command_report', 'coaching', 'transition')),
   clickup_task_id text,
   clickup_task_url text,
   status text not null check (status in ('sent', 'failed')),
@@ -227,7 +227,7 @@ declare
   stored_id uuid;
   secret_name text := 'operator-ai:' || p_user::text || ':' || p_provider;
 begin
-  if p_provider not in ('clickup', 'meta', 'ghl', 'ai', 'fathom') or btrim(coalesce(p_secret, '')) = '' then
+  if p_provider not in ('clickup', 'meta', 'ghl', 'ai', 'fathom', 'slack') or btrim(coalesce(p_secret, '')) = '' then
     raise exception 'Invalid integration secret';
   end if;
   perform pg_advisory_xact_lock(hashtextextended(secret_name, 0));

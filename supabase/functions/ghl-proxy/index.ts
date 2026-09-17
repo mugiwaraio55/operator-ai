@@ -51,7 +51,9 @@ Deno.serve(async (req) => {
         pit,
         locationId,
       );
-    if (!["syncAll", "syncAppointments", "syncOpportunities"].includes(action))
+    if (action === "syncAll" || action === "syncIntelligence")
+      result.intelligence = await syncIntelligence(admin, ownerId, pit, locationId);
+    if (!["syncAll", "syncAppointments", "syncOpportunities", "syncIntelligence"].includes(action))
       return json({ error: "Unsupported GoHighLevel action." }, 400);
     await admin
       .from("integration_connections")
@@ -108,6 +110,7 @@ async function syncAppointments(
       assigned_user_id: stringOrNull(event.assignedUserId),
       assigned_user_name: stringOrNull(event.assignedUserName),
       scheduled_at: scheduledAt,
+      disposition_due_at: new Date(Date.parse(scheduledAt) + 10 * 60000).toISOString(),
       status: String(event.appointmentStatus ?? event.status ?? "booked"),
       source: "ghl",
       raw_payload: event,
@@ -125,6 +128,65 @@ async function syncAppointments(
     if (!error) saved++;
   }
   return { received: events.length, saved };
+}
+
+async function syncIntelligence(
+  admin: ReturnType<typeof adminClient>,
+  userId: string,
+  pit: string,
+  locationId: string,
+) {
+  const [contactsPayload, usersPayload, calendarsPayload, pipelinesPayload] = await Promise.all([
+    ghlFetch(pit, "/contacts/", { locationId, limit: 100 }),
+    ghlFetch(pit, "/users/", { locationId }),
+    ghlFetch(pit, "/calendars/", { locationId }),
+    ghlFetch(pit, "/opportunities/pipelines", { locationId }),
+  ]);
+  const contacts = arrayFrom(contactsPayload, "contacts");
+  if (contacts.length) {
+    const { error } = await admin.from("sales_ghl_contacts").upsert(contacts.map((contact) => {
+      const tags = Array.isArray(contact.tags) ? contact.tags : [];
+      const attributions = Array.isArray(contact.attributions) ? contact.attributions : [];
+      const lastActivity = validDate(contact.dateUpdated ?? contact.lastActivity ?? contact.dateAdded);
+      const ageDays = lastActivity ? Math.max(0, (Date.now() - Date.parse(lastActivity)) / 86400000) : 365;
+      const score = Math.max(0, Math.round(100 - Math.min(60, ageDays * 3) + Math.min(20, tags.length * 4) + Math.min(20, attributions.length * 5)));
+      return {
+        user_id: userId, ghl_contact_id: String(contact.id),
+        name: stringOrNull(contact.name) ?? ([contact.firstName, contact.lastName].filter(Boolean).join(" ") || null),
+        email: stringOrNull(contact.email), phone: stringOrNull(contact.phone),
+        assigned_to: stringOrNull(contact.assignedTo), source: stringOrNull(contact.source),
+        score, conversation_count: Number(contact.conversationCount ?? 0) || 0,
+        last_activity_at: lastActivity, raw_payload: contact, synced_at: new Date().toISOString(),
+      };
+    }), { onConflict: "user_id,ghl_contact_id" });
+    if (error) throw error;
+  }
+  const references: Array<Record<string, unknown>> = [];
+  for (const [kind, rows] of [
+    ["user", arrayFrom(usersPayload, "users")],
+    ["calendar", arrayFrom(calendarsPayload, "calendars")],
+    ["pipeline", arrayFrom(pipelinesPayload, "pipelines")],
+  ] as const) {
+    for (const row of rows) {
+      if (!row.id) continue;
+      references.push({ user_id: userId, kind, external_id: String(row.id), name: String(row.name ?? row.email ?? ""), data: row, synced_at: new Date().toISOString() });
+      if (kind === "pipeline" && Array.isArray(row.stages)) {
+        for (const stage of row.stages as Array<Record<string, unknown>>) if (stage.id) references.push({
+          user_id: userId, kind: "stage", external_id: String(stage.id), name: String(stage.name ?? ""),
+          data: { ...stage, pipelineId: row.id }, synced_at: new Date().toISOString(),
+        });
+      }
+    }
+  }
+  if (references.length) {
+    const { error } = await admin.from("sales_ghl_reference").upsert(references, { onConflict: "user_id,kind,external_id" });
+    if (error) throw error;
+  }
+  return { contacts: contacts.length, references: references.length };
+}
+
+function arrayFrom(payload: Record<string, unknown>, key: string) {
+  return Array.isArray(payload[key]) ? payload[key] as Array<Record<string, unknown>> : [];
 }
 
 async function syncOpportunities(

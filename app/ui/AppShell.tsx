@@ -68,6 +68,7 @@ type View =
   | "media-tools"
   | "media-structure"
   | "media-history"
+  | "media-automation"
   | "integrations";
 type Modal = "ask" | "call" | "eod" | "tool" | null;
 type ToolKey = "audit" | "spy" | "script" | "draft";
@@ -663,6 +664,14 @@ export function AppShell() {
           )}
           {workspace === "media" && (
             <button
+              className={view === "media-automation" ? "active" : ""}
+              onClick={() => setView("media-automation")}
+            >
+              <Activity size={16} /> Autopilot & approvals
+            </button>
+          )}
+          {workspace === "media" && (
+            <button
               className={view === "media-tools" ? "active" : ""}
               onClick={() => setView("media-tools")}
             >
@@ -966,7 +975,7 @@ export function AppShell() {
               />
             )}
           {workspace === "media" &&
-            ["media-tools", "media-structure", "media-history"].includes(
+            ["media-tools", "media-structure", "media-history", "media-automation"].includes(
               view,
             ) && (
               <MediaBuyerModule

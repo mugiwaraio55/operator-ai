@@ -4,7 +4,7 @@ import {
   corsHeaders,
   json,
 } from "../_shared/supabase.ts";
-import { ensureSalesWorkspace, gradeTranscript } from "../_shared/sales.ts";
+import { deliverSalesMessage, ensureSalesWorkspace, gradeTranscript } from "../_shared/sales.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -93,6 +93,16 @@ Deno.serve(async (req) => {
         .eq("id", salesCallId);
       if (callError) throw callError;
     }
+    const { data: repMember } = await admin.from("charles_account_members")
+      .select("slack_user_id,display_name").eq("member_user_id", gradingUserId).maybeSingle();
+    await deliverSalesMessage(
+      admin,
+      membership.owner_user_id,
+      "coaching",
+      `Call feedback ready${repMember?.display_name ? ` for ${repMember.display_name}` : ""}`,
+      `## Score: ${Math.round(grade.overall_score)}/100\n\n${grade.rep_feedback}\n\nReview the full rubric in Call Grading.`,
+      repMember?.slack_user_id,
+    );
     return json({ ok: true, gradingId, ...grade });
   } catch (error) {
     console.error("grade-call", error);
@@ -112,11 +122,11 @@ Deno.serve(async (req) => {
 async function canManageGrade(
   admin: ReturnType<typeof adminClient>,
   callerId: string,
-  callerRole: "owner" | "sales_rep",
+  callerRole: "owner" | "sales_manager" | "sales_rep" | "support",
   gradingUserId: string,
 ) {
   if (gradingUserId === callerId) return true;
-  if (callerRole !== "owner") return false;
+  if (callerRole !== "owner" && callerRole !== "sales_manager") return false;
   const { data } = await admin
     .from("charles_account_members")
     .select("member_user_id")

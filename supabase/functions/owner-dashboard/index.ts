@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
     .map((row) => row.member_user_id);
   const since = new Date(Date.now() - periodDays * 86400000).toISOString();
   const sinceDate = since.slice(0, 10);
-  const [calls, eods, grades, appointments, coaching, settings] = await Promise.all([
+  const [calls, eods, grades, appointments, coaching, settings, commandReport, transitions] = await Promise.all([
     admin
       .from("sales_calls")
       .select("user_id,outcome,score,revenue,happened_at")
@@ -67,9 +67,11 @@ Deno.serve(async (req) => {
       .select("eod_form_schema")
       .eq("user_id", user.id)
       .maybeSingle(),
+    admin.from("sales_command_reports").select("*").eq("user_id", user.id).order("report_date", { ascending: false }).limit(1),
+    admin.from("sales_client_transitions").select("*").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
   ]);
   const queryError = calls.error ?? eods.error ?? grades.error ??
-    appointments.error ?? coaching.error ?? settings.error;
+    appointments.error ?? coaching.error ?? settings.error ?? commandReport.error ?? transitions.error;
   if (queryError) return json({ error: queryError.message }, 500);
   const roster = (members ?? []).map((member) => {
     const memberCalls = (calls.data ?? []).filter(
@@ -178,5 +180,7 @@ Deno.serve(async (req) => {
       eod_reports: (eods.data ?? []).length,
     },
     coaching: coaching.data?.[0] ?? null,
+    commandReport: commandReport.data?.[0] ?? null,
+    transitions: transitions.data ?? [],
   });
 });

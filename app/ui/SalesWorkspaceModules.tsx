@@ -57,6 +57,20 @@ type SalesState = {
 
 const autopilotFunctions = [
   {
+    key: "appointments",
+    title: "Appointment target pacing",
+    cadence: "Every 15 minutes",
+    detail: "Compare today's booked appointments with the configured per-rep target and escalate the gap.",
+    group: "Real-time monitoring",
+  },
+  {
+    key: "accountability",
+    title: "Rep accountability cadence",
+    cadence: "Immediate, +10, +30, +60",
+    detail: "Remind the assigned rep to record appointment disposition, notes, objections, revenue, and next action.",
+    group: "Real-time monitoring",
+  },
+  {
     key: "scan",
     title: "Due-reminder scan",
     cadence: "Every 5 minutes",
@@ -124,6 +138,20 @@ const autopilotFunctions = [
     detail:
       "Create team scorecards and focused coaching actions from calls and CRM execution.",
     group: "Coaching",
+  },
+  {
+    key: "commandReport",
+    title: "Daily Sales Command Report",
+    cadence: "Daily",
+    detail: "Aggregate EOD completion, appointments, closes, cash, grading, blockers, and overdue dispositions.",
+    group: "Daily workflow",
+  },
+  {
+    key: "transition",
+    title: "New-client transition",
+    cadence: "Hourly",
+    detail: "Create a handoff checklist for every recent won opportunity and escalate incomplete onboarding steps.",
+    group: "Daily workflow",
   },
 ] as const;
 
@@ -1814,6 +1842,8 @@ function AppointmentsPanel({ isDemo }: { isDemo: boolean }) {
         objections: values.objections,
         next_steps: values.next_steps,
         follow_up_at: values.follow_up_at || null,
+        outcome_reported_at: new Date().toISOString(),
+        client_transition_required: values.outcome === "won",
       })
       .eq("id", selected.id);
     setBusy(false);

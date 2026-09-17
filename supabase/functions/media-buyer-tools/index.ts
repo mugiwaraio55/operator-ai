@@ -4,6 +4,7 @@ import {
   corsHeaders,
   json,
 } from "../_shared/supabase.ts";
+import { createClickUpTask } from "../_shared/sales.ts";
 
 type Admin = ReturnType<typeof adminClient>;
 type Row = Record<string, unknown>;
@@ -53,8 +54,6 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
   if (req.method !== "POST") return json({ error: "Method not allowed." }, 405);
-  const { user } = await authorizeUser(req);
-  if (!user) return json({ error: "Sign in is required." }, 401);
   const body = (await req.json().catch(() => ({}))) as {
     action?: string;
     input?: Row;
@@ -62,6 +61,19 @@ Deno.serve(async (req) => {
   const action = String(body.action ?? "state");
   const input = body.input ?? {};
   const admin = adminClient();
+  if (action === "run-monitor-all") {
+    if (!isServiceRequest(req)) return json({ error: "Service-role authorization is required." }, 403);
+    const { data: owners, error } = await admin.from("media_buyer_settings").select("user_id").eq("autopilot_enabled", true);
+    if (error) return json({ error: error.message }, 500);
+    const results = [];
+    for (const owner of owners ?? []) {
+      try { results.push({ userId: owner.user_id, ...(await runMonitor(admin, owner.user_id)) }); }
+      catch (error) { results.push({ userId: owner.user_id, error: error instanceof Error ? error.message : "failed" }); }
+    }
+    return json({ ok: true, results });
+  }
+  const { user } = await authorizeUser(req);
+  if (!user) return json({ error: "Sign in is required." }, 401);
   await admin
     .from("media_buyer_settings")
     .upsert(
@@ -80,6 +92,11 @@ Deno.serve(async (req) => {
     if (action === "set-enabled") {
       return json(await setEnabled(admin, user.id, input));
     }
+    if (action === "save-settings") return json(await saveSettings(admin, user.id, input));
+    if (action === "run-monitor") return json(await runMonitor(admin, user.id));
+    if (action === "recommendations") return json(await recommendations(admin, user.id));
+    if (action === "decide-recommendation") return json(await decideRecommendation(admin, user.id, input));
+    if (action === "execute-recommendation") return json(await executeRecommendation(admin, user.id, input));
     if (action === "save-ai") {
       return json(await saveAi(admin, user.id, input));
     }
@@ -170,7 +187,7 @@ async function state(admin: Admin, userId: string) {
       .maybeSingle(),
     admin
       .from("media_buyer_settings")
-      .select("tools_enabled,review_policy")
+      .select("*")
       .eq("user_id", userId)
       .maybeSingle(),
   ]);
@@ -189,6 +206,150 @@ async function state(admin: Admin, userId: string) {
       .filter((account: { id: string }) => account.id)
     : [];
   return { ok: true, meta: meta ? { ...meta, accounts } : null, ai, settings };
+}
+
+async function saveSettings(admin: Admin, userId: string, input: Row) {
+  const allowed = ["tools_enabled", "autopilot_enabled", "timezone", "target_cpl", "target_roas", "max_daily_spend", "fatigue_ctr_drop_pct", "brief_send_time", "clickup_alerts"];
+  const patch: Row = { user_id: userId };
+  for (const key of allowed) if (key in input) patch[key] = input[key];
+  if ("timezone" in patch) new Intl.DateTimeFormat("en-US", { timeZone: String(patch.timezone) }).format();
+  const { error } = await admin.from("media_buyer_settings").upsert(patch, { onConflict: "user_id" });
+  if (error) throw error;
+  return { ok: true };
+}
+
+async function recommendations(admin: Admin, userId: string) {
+  const [{ data: queue }, { data: alerts }, { data: attribution }] = await Promise.all([
+    admin.from("ai_recommendations").select("*").eq("user_id", userId).eq("workspace", "media").order("created_at", { ascending: false }).limit(100),
+    admin.from("media_alerts").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(100),
+    admin.from("media_attribution_snapshots").select("*").eq("user_id", userId).order("report_date", { ascending: false }).limit(100),
+  ]);
+  return { ok: true, recommendations: queue ?? [], alerts: alerts ?? [], attribution: attribution ?? [] };
+}
+
+async function decideRecommendation(admin: Admin, userId: string, input: Row) {
+  const id = Number(input.id ?? 0);
+  const decision = String(input.decision ?? "");
+  if (!id || !["approved", "rejected"].includes(decision)) throw new Error("Choose a valid recommendation decision.");
+  const { data, error } = await admin.from("ai_recommendations").update({
+    status: decision, decision_note: shortText(input.note, 2000), decided_at: new Date().toISOString(), resolved_at: decision === "rejected" ? new Date().toISOString() : null,
+  }).eq("id", id).eq("user_id", userId).eq("workspace", "media").eq("status", "open").select("id,status").maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Only open recommendations can be decided.");
+  return { ok: true, recommendation: data };
+}
+
+async function executeRecommendation(admin: Admin, userId: string, input: Row) {
+  const id = Number(input.id ?? 0);
+  const { data: recommendation, error } = await admin.from("ai_recommendations")
+    .select("id,status,proposed_payload").eq("id", id).eq("user_id", userId).eq("workspace", "media").maybeSingle();
+  if (error) throw error;
+  if (!recommendation || recommendation.status !== "approved") throw new Error("Approve the recommendation before execution.");
+  const proposal = recommendation.proposed_payload as Row;
+  const objectId = String(proposal.object_id ?? "");
+  const operation = String(proposal.operation ?? "");
+  if (!/^\d+$/.test(objectId) || !["pause", "set_daily_budget"].includes(operation)) throw new Error("This recommendation is advisory and cannot be auto-executed.");
+  const credentials = await metaCredentials(admin, userId);
+  if (!credentials.token) throw new Error("Reconnect Meta first.");
+  await admin.from("ai_recommendations").update({ status: "executing", execution_error: null }).eq("id", id);
+  try {
+    const params = operation === "pause" ? { status: "PAUSED" } : { daily_budget: String(Math.max(100, Math.round(number(proposal.value)))) };
+    const result = await graph(credentials.token, objectId, params, "POST");
+    await admin.from("ai_recommendations").update({ status: "executed", executed_at: new Date().toISOString(), resolved_at: new Date().toISOString() }).eq("id", id);
+    return { ok: true, result };
+  } catch (caught) {
+    await admin.from("ai_recommendations").update({ status: "failed", execution_error: caught instanceof Error ? caught.message : "Meta update failed" }).eq("id", id);
+    throw caught;
+  }
+}
+
+async function runMonitor(admin: Admin, userId: string) {
+  const credentials = await metaCredentials(admin, userId);
+  if (!credentials.token || !credentials.accountId) throw new Error("Connect and select a Meta ad account first.");
+  const { data: settings } = await admin.from("media_buyer_settings").select("*").eq("user_id", userId).single();
+  const [insightsPayload, campaignsPayload] = await Promise.all([
+    graph(credentials.token, `act_${credentials.accountId}/insights`, {
+      fields: "campaign_id,campaign_name,spend,impressions,clicks,ctr,actions,action_values,date_start,date_stop",
+      date_preset: "last_14d", level: "campaign", time_increment: "1", limit: "500",
+    }),
+    graph(credentials.token, `act_${credentials.accountId}/campaigns`, { fields: "id,name,status,effective_status,daily_budget", limit: "200" }),
+  ]);
+  const daily = arrayData(insightsPayload);
+  const campaigns = new Map(arrayData(campaignsPayload).map((row) => [String(row.id), row]));
+  if (daily.length) await admin.from("meta_campaign_snapshots").upsert(daily.map((row) => ({
+    user_id: userId, ad_account_id: credentials.accountId, meta_campaign_id: String(row.campaign_id), campaign_name: String(row.campaign_name ?? row.campaign_id),
+    status: String(campaigns.get(String(row.campaign_id))?.effective_status ?? "UNKNOWN"), spend: number(row.spend), impressions: Math.round(number(row.impressions)), clicks: Math.round(number(row.clicks)),
+    leads: Math.round(actionValue(row.actions, ["lead", "onsite_conversion.lead_grouped", "offsite_conversion.fb_pixel_lead"])), purchases: Math.round(actionValue(row.actions, ["purchase", "offsite_conversion.fb_pixel_purchase"])),
+    revenue: actionValue(row.action_values, ["purchase", "offsite_conversion.fb_pixel_purchase"]), currency: credentials.currency,
+    date_start: String(row.date_start), date_stop: String(row.date_stop), raw_payload: row, synced_at: new Date().toISOString(),
+  })), { onConflict: "user_id,ad_account_id,meta_campaign_id,date_start,date_stop" });
+  const groups = new Map<string, Row[]>();
+  for (const row of daily) groups.set(String(row.campaign_id), [...(groups.get(String(row.campaign_id)) ?? []), row]);
+  let alerts = 0; let proposals = 0; const alertTitles: string[] = [];
+  const dateKey = new Date().toISOString().slice(0, 10);
+  for (const [campaignId, rows] of groups) {
+    rows.sort((a, b) => String(a.date_start).localeCompare(String(b.date_start)));
+    const recent = summarize(rows.slice(-3)); const prior = summarize(rows.slice(-6, -3));
+    const campaign = campaigns.get(campaignId) ?? {};
+    const cpl = recent.leads ? recent.spend / recent.leads : null;
+    const roas = recent.spend ? recent.revenue / recent.spend : 0;
+    const issues: Array<{ kind: string; severity: string; title: string; detail: string }> = [];
+    if (recent.spend / 3 > number(settings?.max_daily_spend)) issues.push({ kind: "spend", severity: "critical", title: "Daily spend is above the guardrail", detail: `$${(recent.spend / 3).toFixed(2)} average daily spend.` });
+    if (cpl !== null && cpl > number(settings?.target_cpl) * 1.25) issues.push({ kind: "cpl", severity: "warning", title: "CPL is above target", detail: `$${cpl.toFixed(2)} recent CPL.` });
+    if (recent.spend > 0 && roas < number(settings?.target_roas) * .75) issues.push({ kind: "roas", severity: "warning", title: "ROAS is below target", detail: `${roas.toFixed(2)}x tracked ROAS.` });
+    if (recent.clicks >= 10 && recent.leads === 0) issues.push({ kind: "tracking", severity: "critical", title: "Clicks have no lead signal", detail: `${recent.clicks} clicks and no attributed leads.` });
+    if (prior.ctr > 0 && recent.ctr < prior.ctr * (1 - number(settings?.fatigue_ctr_drop_pct) / 100)) issues.push({ kind: "creative_fatigue", severity: "warning", title: "Creative fatigue signal", detail: `CTR fell from ${prior.ctr.toFixed(2)}% to ${recent.ctr.toFixed(2)}%.` });
+    for (const issue of issues) {
+      const { data: insertedAlert, error } = await admin.from("media_alerts").upsert({ user_id: userId, ad_account_id: credentials.accountId, campaign_id: campaignId, alert_kind: issue.kind, severity: issue.severity, title: `${String(campaign.name ?? campaignId)}: ${issue.title}`, detail: issue.detail, evidence: { recent, prior }, dedupe_key: `${dateKey}:${campaignId}:${issue.kind}` }, { onConflict: "user_id,dedupe_key", ignoreDuplicates: true }).select("id").maybeSingle();
+      if (!error && insertedAlert) { alerts++; alertTitles.push(`${String(campaign.name ?? campaignId)}: ${issue.title} — ${issue.detail}`); }
+    }
+    if ((recent.spend >= number(settings?.target_cpl) * 2 && recent.leads === 0) || (recent.spend > 0 && roas < number(settings?.target_roas) * .5)) {
+      const { error } = await admin.from("ai_recommendations").insert({ user_id: userId, workspace: "media", subject_id: campaignId, action: "kill", title: `Pause ${String(campaign.name ?? campaignId)} for review`, detail: `Recent spend $${recent.spend.toFixed(2)}, ${recent.leads} leads, ${roas.toFixed(2)}x ROAS.`, priority: 1, evidence: { recent, prior }, proposed_payload: { operation: "pause", object_id: campaignId } });
+      if (!error) proposals++;
+    } else if (recent.leads >= 3 && cpl !== null && cpl <= number(settings?.target_cpl) && roas >= number(settings?.target_roas)) {
+      const budget = number(campaign.daily_budget);
+      const { error } = await admin.from("ai_recommendations").insert({ user_id: userId, workspace: "media", subject_id: campaignId, action: "scale", title: `Consider scaling ${String(campaign.name ?? campaignId)}`, detail: `${recent.leads} leads at $${cpl.toFixed(2)} CPL and ${roas.toFixed(2)}x ROAS.`, priority: 2, evidence: { recent, prior }, proposed_payload: budget ? { operation: "set_daily_budget", object_id: campaignId, value: Math.round(budget * 1.15) } : { operation: "review", object_id: campaignId } });
+      if (!error) proposals++;
+    }
+  }
+  await buildAttribution(admin, userId, credentials.accountId, dateKey, daily);
+  if (alertTitles.length && settings?.clickup_alerts !== false) {
+    await createClickUpTask(admin, userId, "media_brief", `Media Buyer alerts · ${dateKey}`, `## ${alertTitles.length} items need review\n\n${alertTitles.map((title) => `- ${title}`).join("\n")}\n\nReview and approve any proposed campaign change inside Operator AI.`);
+  }
+  return { ok: true, rows: daily.length, alerts, proposals };
+}
+
+function summarize(rows: Row[]) {
+  const totals = rows.reduce((sum, row) => ({ spend: sum.spend + number(row.spend), impressions: sum.impressions + number(row.impressions), clicks: sum.clicks + number(row.clicks), leads: sum.leads + actionValue(row.actions, ["lead", "onsite_conversion.lead_grouped", "offsite_conversion.fb_pixel_lead"]), revenue: sum.revenue + actionValue(row.action_values, ["purchase", "offsite_conversion.fb_pixel_purchase"]) }), { spend: 0, impressions: 0, clicks: 0, leads: 0, revenue: 0 });
+  return { ...totals, ctr: totals.impressions ? totals.clicks / totals.impressions * 100 : 0 };
+}
+
+async function buildAttribution(admin: Admin, userId: string, accountId: string, reportDate: string, daily: Row[]) {
+  const [{ data: contacts }, { data: opportunities }] = await Promise.all([
+    admin.from("sales_ghl_contacts").select("ghl_contact_id,raw_payload").eq("user_id", userId),
+    admin.from("sales_opportunities").select("contact_id,status,monetary_value").eq("user_id", userId),
+  ]);
+  const oppByContact = new Map<string, Row[]>();
+  for (const opp of opportunities ?? []) oppByContact.set(String(opp.contact_id), [...(oppByContact.get(String(opp.contact_id)) ?? []), opp]);
+  const rollup = new Map<string, { leads: number; won: number; revenue: number }>();
+  for (const contact of contacts ?? []) {
+    const raw = contact.raw_payload as Row; const attrs = Array.isArray(raw.attributions) ? raw.attributions as Row[] : [];
+    for (const attr of attrs) {
+      const campaignId = String(attr.campaignId ?? ""); if (!campaignId) continue;
+      const current = rollup.get(campaignId) ?? { leads: 0, won: 0, revenue: 0 }; current.leads++;
+      for (const opp of oppByContact.get(String(contact.ghl_contact_id)) ?? []) if (opp.status === "won") { current.won++; current.revenue += number(opp.monetary_value); }
+      rollup.set(campaignId, current);
+    }
+  }
+  const todaySpend = new Map<string, number>();
+  for (const row of daily.filter((item) => item.date_start === reportDate)) todaySpend.set(String(row.campaign_id), number(row.spend));
+  const ids = new Set([...rollup.keys(), ...todaySpend.keys()]);
+  if (ids.size) await admin.from("media_attribution_snapshots").upsert([...ids].map((campaignId) => ({ user_id: userId, ad_account_id: accountId, meta_campaign_id: campaignId, report_date: reportDate, leads: rollup.get(campaignId)?.leads ?? 0, won: rollup.get(campaignId)?.won ?? 0, revenue: rollup.get(campaignId)?.revenue ?? 0, spend: todaySpend.get(campaignId) ?? 0, metadata: { source: "ghl_attributions" } })), { onConflict: "user_id,ad_account_id,meta_campaign_id,report_date" });
+}
+
+function isServiceRequest(req: Request) {
+  const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  return [Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"), Deno.env.get("SUPABASE_SECRET_KEY")].filter(Boolean).includes(token);
 }
 
 async function selectAccount(admin: Admin, userId: string, input: Row) {

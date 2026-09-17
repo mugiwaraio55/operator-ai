@@ -18,7 +18,7 @@ export async function ensureSalesWorkspace(
     }
     return existing as {
       owner_user_id: string;
-      role: "owner" | "sales_rep";
+      role: "owner" | "sales_manager" | "sales_rep" | "support";
       is_active: boolean;
     };
   }
@@ -54,7 +54,7 @@ export async function credentialOwner(admin: AdminClient, userId: string) {
 export async function integrationSecret(
   admin: AdminClient,
   userId: string,
-  provider: "ghl" | "ai" | "clickup" | "fathom",
+  provider: "ghl" | "ai" | "clickup" | "fathom" | "slack",
 ) {
   const ownerId = await credentialOwner(admin, userId);
   const { data, error } = await admin.rpc("get_integration_secret", {
@@ -106,7 +106,7 @@ export async function ghlFetch(
 export async function createClickUpTask(
   admin: AdminClient,
   userId: string,
-  kind: "sales_brief" | "test",
+  kind: "sales_brief" | "media_brief" | "test" | "accountability" | "eod" | "command_report" | "coaching" | "transition",
   name: string,
   markdown: string,
 ) {
@@ -160,6 +160,52 @@ export async function createClickUpTask(
   return response.ok
     ? { ok: true, taskId: payload.id, taskUrl: payload.url }
     : { ok: false, error: payload.err ?? "ClickUp rejected the task." };
+}
+
+export async function postSlackMessage(
+  admin: AdminClient,
+  userId: string,
+  channel: string,
+  text: string,
+) {
+  const { ownerId, secret: token } = await integrationSecret(admin, userId, "slack");
+  if (!token || !channel) return { ok: false, error: "Connect Slack and choose a channel first." };
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ channel, text: text.slice(0, 38000), unfurl_links: false }),
+  });
+  const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string; ts?: string };
+  if (!response.ok || !payload.ok) return { ok: false, error: payload.error ?? "Slack rejected the message." };
+  await admin.from("integration_connections").update({ refreshed_at: new Date().toISOString() })
+    .eq("user_id", ownerId).eq("provider", "slack");
+  return { ok: true, messageId: payload.ts };
+}
+
+export async function deliverSalesMessage(
+  admin: AdminClient,
+  ownerId: string,
+  kind: "sales_brief" | "accountability" | "eod" | "command_report" | "coaching" | "transition",
+  title: string,
+  markdown: string,
+  slackRecipient?: string | null,
+) {
+  const { data: settings } = await admin.from("sales_manager_settings")
+    .select("delivery_channel,slack_default_channel").eq("user_id", ownerId).maybeSingle();
+  const channel = String(settings?.delivery_channel ?? "clickup");
+  const results: unknown[] = [];
+  if (channel === "slack" || channel === "both") {
+    results.push(await postSlackMessage(
+      admin,
+      ownerId,
+      slackRecipient || String(settings?.slack_default_channel ?? ""),
+      `*${title}*\n${markdown.replaceAll("## ", "*").replaceAll("**", "*")}`,
+    ));
+  }
+  if (channel === "clickup" || channel === "both" || results.every((item) => !(item as { ok?: boolean }).ok)) {
+    results.push(await createClickUpTask(admin, ownerId, kind, title, markdown));
+  }
+  return { ok: results.some((item) => (item as { ok?: boolean }).ok), deliveries: results };
 }
 
 export async function webhookOwner(req: Request, admin: AdminClient) {

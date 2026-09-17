@@ -60,6 +60,9 @@ Deno.serve(async (req) => {
         "locations.readonly",
         "calendars/events.readonly",
         "opportunities.readonly",
+        "contacts.readonly",
+        "users.readonly",
+        "calendars.readonly",
       ],
       metadata: { last4: pit.slice(-4) },
       refreshed_at: new Date().toISOString(),
@@ -72,10 +75,13 @@ Deno.serve(async (req) => {
   if (
     action === "disconnectGhl" ||
     action === "removeAi" ||
-    action === "removeFathom"
+    action === "removeFathom" ||
+    action === "removeSlack"
   ) {
     const provider = action === "disconnectGhl"
       ? "ghl"
+      : action === "removeSlack"
+      ? "slack"
       : action === "removeFathom"
       ? "fathom"
       : "ai";
@@ -89,6 +95,34 @@ Deno.serve(async (req) => {
       .eq("user_id", ownerId)
       .eq("provider", provider);
     return error ? json({ error: error.message }, 500) : json({ ok: true });
+  }
+
+  if (action === "saveSlack") {
+    const botToken = String(body.botToken ?? "").trim();
+    const channel = String(body.channel ?? "").trim();
+    if (!/^xoxb-[A-Za-z0-9-]{20,}$/.test(botToken) || channel.length < 2) {
+      return json({ error: "Enter a Slack bot token and destination channel ID." }, 400);
+    }
+    const authResponse = await fetch("https://slack.com/api/auth.test", {
+      headers: { Authorization: `Bearer ${botToken}` },
+    });
+    const authPayload = await authResponse.json().catch(() => ({})) as Record<string, unknown>;
+    if (!authResponse.ok || authPayload.ok !== true) {
+      return json({ error: `Slack connection failed: ${String(authPayload.error ?? "invalid_auth")}` }, 400);
+    }
+    const { error: secretError } = await admin.rpc("set_integration_secret", {
+      p_user: ownerId, p_provider: "slack", p_secret: botToken,
+    });
+    if (secretError) return json({ error: secretError.message }, 500);
+    const { error } = await admin.from("integration_connections").upsert({
+      user_id: ownerId, provider: "slack", status: "connected",
+      account_id: String(authPayload.team_id ?? ""),
+      account_name: String(authPayload.team ?? "Slack"),
+      scopes: ["chat:write"], metadata: { channel, bot_user_id: authPayload.user_id ?? null, last4: botToken.slice(-4) },
+      refreshed_at: new Date().toISOString(),
+    });
+    if (!error) await admin.from("sales_manager_settings").upsert({ user_id: ownerId, slack_default_channel: channel }, { onConflict: "user_id" });
+    return error ? json({ error: error.message }, 500) : json({ ok: true, team: authPayload.team });
   }
 
   if (action === "saveAi") {
@@ -188,6 +222,11 @@ Deno.serve(async (req) => {
       "coaching_send_time",
       "eod_enforce_delay_minutes",
       "eod_form_schema",
+      "delivery_channel",
+      "slack_default_channel",
+      "command_report_send_time",
+      "appointment_reminder_minutes",
+      "disposition_due_minutes",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) if (key in body) patch[key] = body[key];
@@ -223,7 +262,7 @@ Deno.serve(async (req) => {
         .from("integration_connections")
         .select("provider,status,account_id,account_name,metadata,refreshed_at")
         .eq("user_id", ownerId)
-        .in("provider", ["ghl", "ai", "fathom"]),
+        .in("provider", ["ghl", "ai", "fathom", "slack"]),
       admin
         .from("sales_webhook_tokens")
         .select("token,rotated_at")

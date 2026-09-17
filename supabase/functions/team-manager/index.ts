@@ -19,6 +19,9 @@ Deno.serve(async (req) => {
     email?: string;
     name?: string;
     memberUserId?: string;
+    role?: string;
+    managerUserId?: string | null;
+    slackUserId?: string | null;
   };
   const action = body.action ?? "list";
   if (membership.role !== "owner")
@@ -66,16 +69,35 @@ Deno.serve(async (req) => {
       {
         member_user_id: memberUserId,
         owner_user_id: user.id,
-        role: "sales_rep",
+        role: ["sales_manager", "sales_rep", "support"].includes(String(body.role)) ? body.role : "sales_rep",
         is_active: true,
         invited_email: email,
         display_name: name || null,
+        manager_user_id: body.managerUserId || null,
+        slack_user_id: String(body.slackUserId ?? "").trim() || null,
       },
       { onConflict: "member_user_id" },
     );
     return error
       ? json({ error: error.message }, 400)
       : json({ ok: true, memberUserId });
+  }
+
+  if (action === "updateMember") {
+    const memberUserId = String(body.memberUserId ?? "");
+    const role = String(body.role ?? "sales_rep");
+    if (!memberUserId || memberUserId === user.id || !["sales_manager", "sales_rep", "support"].includes(role)) {
+      return json({ error: "Select a team member and valid role." }, 400);
+    }
+    const managerUserId = body.managerUserId ? String(body.managerUserId) : null;
+    if (managerUserId === memberUserId) return json({ error: "A team member cannot manage themselves." }, 400);
+    const { error } = await admin.from("charles_account_members").update({
+      role,
+      manager_user_id: managerUserId,
+      slack_user_id: String(body.slackUserId ?? "").trim() || null,
+      display_name: String(body.name ?? "").trim().slice(0, 120) || null,
+    }).eq("owner_user_id", user.id).eq("member_user_id", memberUserId);
+    return error ? json({ error: error.message }, 400) : json({ ok: true });
   }
 
   if (action === "deactivate" || action === "reactivate") {
@@ -86,15 +108,14 @@ Deno.serve(async (req) => {
       .from("charles_account_members")
       .update({ is_active: action === "reactivate" })
       .eq("owner_user_id", user.id)
-      .eq("member_user_id", memberUserId)
-      .eq("role", "sales_rep");
+      .eq("member_user_id", memberUserId);
     return error ? json({ error: error.message }, 500) : json({ ok: true });
   }
 
   const { data: rows, error } = await admin
     .from("charles_account_members")
     .select(
-      "member_user_id,role,is_active,invited_email,display_name,eod_token,invited_at",
+      "member_user_id,role,is_active,invited_email,display_name,eod_token,invited_at,manager_user_id,slack_user_id,permissions",
     )
     .eq("owner_user_id", membership.owner_user_id)
     .order("invited_at");

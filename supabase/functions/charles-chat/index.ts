@@ -34,6 +34,11 @@ Deno.serve(async (req) => {
   if (messageError) return json({ error: messageError.message }, 500);
 
   const ownerId = membership.owner_user_id;
+  const { data: teamMembers } = await admin.from("charles_account_members")
+    .select("member_user_id").eq("owner_user_id", ownerId).eq("is_active", true);
+  const contextUserIds = membership.role === "owner" || membership.role === "sales_manager"
+    ? (teamMembers ?? []).map((row) => row.member_user_id)
+    : [user.id];
   const reminder = parseReminder(message);
   if (reminder)
     await admin.from("charles_reminders").insert({
@@ -62,13 +67,13 @@ Deno.serve(async (req) => {
     admin
       .from("charles_messages")
       .select("role,content")
-      .eq("user_id", user.id)
+      .in("user_id", contextUserIds)
       .order("created_at", { ascending: false })
       .limit(16),
     admin
       .from("charles_memories")
       .select("content,kind")
-      .eq("user_id", user.id)
+      .in("user_id", contextUserIds)
       .order("created_at", { ascending: false })
       .limit(20),
     admin
@@ -76,7 +81,7 @@ Deno.serve(async (req) => {
       .select(
         "prospect_name,rep_name,outcome,score,revenue,primary_objection,happened_at",
       )
-      .eq("user_id", user.id)
+      .in("user_id", contextUserIds)
       .order("happened_at", { ascending: false })
       .limit(30),
     admin
@@ -101,7 +106,7 @@ Deno.serve(async (req) => {
       .select(
         "report_date,calls_taken,closes,revenue,wins,blockers,priorities,mood",
       )
-      .eq("user_id", user.id)
+      .in("user_id", contextUserIds)
       .order("report_date", { ascending: false })
       .limit(7),
   ]);

@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   BarChart3,
+  BellRing,
   CheckCircle2,
   ExternalLink,
   Eye,
@@ -22,6 +23,7 @@ export type MediaModule =
   | "media-tools"
   | "media-structure"
   | "media-history"
+  | "media-automation"
   | "media-settings";
 
 type Row = Record<string, unknown>;
@@ -257,7 +259,62 @@ export function MediaBuyerModule({
     return <ToolsPanel isDemo={isDemo} initialTool={initialTool} />;
   if (module === "media-structure") return <StructurePanel isDemo={isDemo} />;
   if (module === "media-history") return <HistoryPanel isDemo={isDemo} />;
+  if (module === "media-automation") return <AutomationPanel isDemo={isDemo} />;
   return <SettingsPanel isDemo={isDemo} onConnectMeta={onConnectMeta} />;
+}
+
+function AutomationPanel({ isDemo }: { isDemo: boolean }) {
+  const demo = {
+    recommendations: [{ id: 1, status: "open", action: "scale", title: "Scale Proof Stack by 15%", detail: "CPL is below target and CRM revenue confirms healthy ROAS.", proposed_payload: { operation: "set_daily_budget", value: 17250 } }],
+    alerts: [{ id: 1, severity: "warning", title: "Founder Story: Creative fatigue signal", detail: "CTR fell 29% versus the prior three days." }],
+    attribution: [{ meta_campaign_id: "12001", leads: 18, won: 4, revenue: 12400, spend: 3220 }],
+  };
+  const [data, setData] = useState<Row>(isDemo ? demo : {});
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const load = useCallback(async () => {
+    if (isDemo) return;
+    setBusy(true);
+    try { setData(await invoke("recommendations")); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Automation data could not be loaded."); }
+    finally { setBusy(false); }
+  }, [isDemo]);
+  useEffect(() => { queueMicrotask(() => void load()); }, [load]);
+  async function runMonitor() {
+    if (isDemo) { setNotice("Demo monitor completed: one alert and one proposal created."); return; }
+    setBusy(true);
+    try { const result = await invoke("run-monitor"); setNotice(`Monitor completed: ${Number(result.alerts ?? 0)} alerts and ${Number(result.proposals ?? 0)} proposals.`); await load(); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Monitor failed."); }
+    finally { setBusy(false); }
+  }
+  async function decide(id: unknown, decision: "approved" | "rejected") {
+    if (isDemo) { setData((current) => ({ ...current, recommendations: (current.recommendations as Row[]).map((item) => item.id === id ? { ...item, status: decision } : item) })); return; }
+    setBusy(true);
+    try { await invoke("decide-recommendation", { id, decision }); await load(); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Decision failed."); }
+    finally { setBusy(false); }
+  }
+  async function execute(id: unknown) {
+    if (isDemo) { setNotice("Demo approved change executed."); return; }
+    setBusy(true);
+    try { await invoke("execute-recommendation", { id }); setNotice("Approved Meta change executed and logged."); await load(); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Execution failed."); }
+    finally { setBusy(false); }
+  }
+  const queue = Array.isArray(data.recommendations) ? data.recommendations as Row[] : [];
+  const alerts = Array.isArray(data.alerts) ? data.alerts as Row[] : [];
+  const attribution = Array.isArray(data.attribution) ? data.attribution as Row[] : [];
+  return <section>
+    <ModuleHeading eyebrow="MEDIA BUYER AUTOPILOT" title="Monitor continuously. Change campaigns only after approval." detail="Detect spend, CPL, ROAS, tracking, delivery, and fatigue problems; reconcile Meta campaigns with GHL revenue; then review every proposed action before execution." action={<button className="small-primary" disabled={busy} onClick={() => void runMonitor()}><RefreshCw className={busy ? "spin" : ""} size={14}/> Run monitor</button>} />
+    {notice && <p className="inline-notice">{notice}</p>}
+    <div className="ops-grid">
+      <article className="panel"><div className="panel-head"><div><span className="eyebrow">APPROVAL QUEUE</span><h3>Recommended campaign actions</h3></div><ShieldCheck size={18}/></div>
+        <div className="history-list">{queue.map((item) => <div key={String(item.id)} className="history-card"><span><b>{String(item.title)}</b><small>{String(item.detail ?? "")}</small></span><i className={`outcome ${String(item.status)}`}>{String(item.status)}</i>{item.status === "open" && <div className="button-row"><button disabled={busy} onClick={() => void decide(item.id, "approved")}>Approve</button><button disabled={busy} onClick={() => void decide(item.id, "rejected")}>Reject</button></div>}{item.status === "approved" && <button className="small-primary" disabled={busy} onClick={() => void execute(item.id)}>Execute approved change</button>}</div>)}{!queue.length && <p className="empty-copy">No recommendations yet. Run the monitor after connecting Meta.</p>}</div>
+      </article>
+      <article className="panel"><div className="panel-head"><div><span className="eyebrow">ANOMALY ALERTS</span><h3>What needs attention</h3></div><BellRing size={18}/></div><div className="history-list">{alerts.map((item) => <div key={String(item.id)} className="history-card"><span><b>{String(item.title)}</b><small>{String(item.detail ?? "")}</small></span><i className={`outcome ${String(item.severity)}`}>{String(item.severity)}</i></div>)}{!alerts.length && <p className="empty-copy">No anomalies detected.</p>}</div></article>
+    </div>
+    <article className="panel structure-table"><div className="panel-head"><div><span className="eyebrow">CLOSED-LOOP ATTRIBUTION</span><h3>Meta spend to GHL wins</h3></div><BarChart3 size={18}/></div><div className="structure-row header"><span>Campaign</span><span>Leads</span><span>Won</span><span>Revenue</span><span>Spend</span><span>CRM ROAS</span><span>Source</span></div>{attribution.map((row) => <div className="structure-row" key={`${row.meta_campaign_id}-${row.report_date}`}><span>{String(row.meta_campaign_id)}</span><span>{Number(row.leads ?? 0)}</span><span>{Number(row.won ?? 0)}</span><span>{formatMoney(row.revenue)}</span><span>{formatMoney(row.spend)}</span><span>{Number(row.spend) ? `${(Number(row.revenue) / Number(row.spend)).toFixed(2)}x` : "-"}</span><span>GHL attribution</span></div>)}</article>
+  </section>;
 }
 
 async function invoke(action: string, input: Row = {}) {
@@ -1345,6 +1402,25 @@ function SettingsPanel({
           </form>
         </article>
       </div>
+      <article className="panel integration-form">
+        <div className="panel-head"><div><span className="eyebrow">AUTOPILOT GUARDRAILS</span><h3>Monitoring and decision thresholds</h3></div><BellRing size={18} /></div>
+        <form className="form-stack" onSubmit={(event) => {
+          event.preventDefault();
+          const values = Object.fromEntries(new FormData(event.currentTarget));
+          void run("save-settings", {
+            autopilot_enabled: values.autopilot_enabled === "on",
+            target_cpl: Number(values.target_cpl), target_roas: Number(values.target_roas),
+            max_daily_spend: Number(values.max_daily_spend), fatigue_ctr_drop_pct: Number(values.fatigue_ctr_drop_pct),
+            timezone: values.timezone, brief_send_time: values.brief_send_time,
+            clickup_alerts: values.clickup_alerts === "on",
+          }, "Autopilot guardrails saved.");
+        }}>
+          <label className="toggle-row"><span><b>Scheduled Media Buyer monitor</b><small>Run hourly anomaly, fatigue, attribution, and recommendation checks.</small></span><input name="autopilot_enabled" type="checkbox" defaultChecked={settings.autopilot_enabled === true} /></label>
+          <label className="toggle-row"><span><b>Send new alerts to ClickUp</b><small>Create one deduplicated daily task for newly detected campaign risks.</small></span><input name="clickup_alerts" type="checkbox" defaultChecked={settings.clickup_alerts !== false} /></label>
+          <div className="form-grid two"><label>Target CPL<input name="target_cpl" type="number" min="1" step="0.01" defaultValue={Number(settings.target_cpl ?? 45)} /></label><label>Target ROAS<input name="target_roas" type="number" min="0.1" step="0.1" defaultValue={Number(settings.target_roas ?? 2.5)} /></label><label>Max daily spend<input name="max_daily_spend" type="number" min="0" step="0.01" defaultValue={Number(settings.max_daily_spend ?? 1000)} /></label><label>Fatigue CTR drop %<input name="fatigue_ctr_drop_pct" type="number" min="1" max="100" defaultValue={Number(settings.fatigue_ctr_drop_pct ?? 25)} /></label><label>Timezone<input name="timezone" defaultValue={String(settings.timezone ?? "America/Chicago")} /></label><label>Brief time<input name="brief_send_time" type="time" defaultValue={String(settings.brief_send_time ?? "08:00").slice(0, 5)} /></label></div>
+          <button className="primary-btn" disabled={busy}>Save autopilot guardrails</button>
+        </form>
+      </article>
       <article className="panel safety-settings">
         <div>
           <ShieldCheck size={24} />

@@ -7,6 +7,7 @@ import {
   Clipboard,
   CloudCog,
   LoaderCircle,
+  MessageSquareText,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -102,11 +103,13 @@ function PipelinePanel({ isDemo }: { isDemo: boolean }) {
   const [grades, setGrades] = useState<Record<string, unknown>[]>(
     isDemo ? demoGrades : [],
   );
+  const [contacts, setContacts] = useState<Record<string, unknown>[]>([]);
+  const [references, setReferences] = useState<Record<string, unknown>[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const load = useCallback(async () => {
     if (isDemo || !supabase) return;
-    const [a, o, g] = await Promise.all([
+    const [a, o, g, c, r] = await Promise.all([
       supabase
         .from("sales_appointments")
         .select("*")
@@ -122,10 +125,14 @@ function PipelinePanel({ isDemo }: { isDemo: boolean }) {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(50),
+      supabase.from("sales_ghl_contacts").select("*").order("score", { ascending: false }).limit(50),
+      supabase.from("sales_ghl_reference").select("*").order("kind").limit(200),
     ]);
     if (a.data) setAppointments(a.data);
     if (o.data) setOpportunities(o.data);
     if (g.data) setGrades(g.data);
+    if (c.data) setContacts(c.data);
+    if (r.data) setReferences(r.data);
   }, [isDemo]);
   useEffect(() => {
     queueMicrotask(() => void load());
@@ -144,7 +151,7 @@ function PipelinePanel({ isDemo }: { isDemo: boolean }) {
     setNotice(
       error
         ? error.message
-        : `Synced ${data?.appointments?.saved ?? 0} appointments and ${data?.opportunities?.saved ?? data?.opportunities?.received ?? 0} opportunities.`,
+        : `Synced ${data?.appointments?.saved ?? 0} appointments, ${data?.opportunities?.saved ?? data?.opportunities?.received ?? 0} opportunities, and ${data?.intelligence?.contacts ?? 0} contacts.`,
     );
     if (!error) await load();
   }
@@ -240,6 +247,10 @@ function PipelinePanel({ isDemo }: { isDemo: boolean }) {
             ))}
           </div>
         </article>
+      </div>
+      <div className="ops-grid">
+        <article className="panel"><div className="panel-head"><div><span className="eyebrow">CONTACT INTELLIGENCE</span><h3>Highest-priority contacts</h3></div><strong>{contacts.length}</strong></div><div className="stack-list">{contacts.slice(0, 8).map((row) => <div key={String(row.id)}><span><b>{String(row.name ?? row.email ?? row.phone ?? "Contact")}</b><small>{String(row.source ?? "Unknown source")} · {row.last_activity_at ? new Date(String(row.last_activity_at)).toLocaleDateString() : "No activity"}</small></span><i>{Number(row.score ?? 0).toFixed(0)} score</i></div>)}</div></article>
+        <article className="panel"><div className="panel-head"><div><span className="eyebrow">GHL CONFIGURATION</span><h3>Users, calendars, pipelines & stages</h3></div><strong>{references.length}</strong></div><div className="stack-list">{["user", "calendar", "pipeline", "stage"].map((kind) => <div key={kind}><span><b>{kind[0].toUpperCase() + kind.slice(1)}s</b><small>{references.filter((row) => row.kind === kind).slice(0, 3).map((row) => row.name).join(" · ") || "None synced"}</small></span><i>{references.filter((row) => row.kind === kind).length}</i></div>)}</div></article>
       </div>
       <section className="panel grading-panel">
         <div className="panel-head">
@@ -360,6 +371,12 @@ function CharlesPanel({ isDemo }: { isDemo: boolean }) {
       ]);
     else await load();
   }
+  async function forget(id: unknown) {
+    if (isDemo) { setMemories((current) => current.filter((row) => row.id !== id)); return; }
+    if (!supabase) return;
+    const { error } = await supabase.from("charles_memories").delete().eq("id", id);
+    if (!error) await load();
+  }
   return (
     <section>
       <ModuleHeading
@@ -411,6 +428,7 @@ function CharlesPanel({ isDemo }: { isDemo: boolean }) {
               <div className="memory-item" key={String(row.id)}>
                 <small>{String(row.kind ?? "context")}</small>
                 <p>{String(row.content)}</p>
+                <button className="danger-link" onClick={() => void forget(row.id)}>Forget</button>
               </div>
             ))
           ) : (
@@ -489,10 +507,13 @@ function TeamPanel({ isDemo }: { isDemo: boolean }) {
         action: "invite",
         email: values.get("email"),
         name: values.get("name"),
+        role: values.get("role"),
+        managerUserId: values.get("managerUserId") || null,
+        slackUserId: values.get("slackUserId") || null,
       },
     });
     setBusy(false);
-    setNotice(error ? error.message : "Sales rep invited.");
+    setNotice(error ? error.message : "Team member invited and assigned.");
     if (!error) {
       event.currentTarget.reset();
       await load();
@@ -565,7 +586,7 @@ function TeamPanel({ isDemo }: { isDemo: boolean }) {
                       <Clipboard size={14} />
                     </button>
                   )}
-                  {row.role === "sales_rep" && (
+                  {row.role !== "owner" && (
                     <button disabled={busy} onClick={() => void toggle(row)}>
                       {row.is_active ? "Deactivate" : "Reactivate"}
                     </button>
@@ -578,8 +599,8 @@ function TeamPanel({ isDemo }: { isDemo: boolean }) {
         <article className="panel">
           <div className="panel-head">
             <div>
-              <span className="eyebrow">ADD A REP</span>
-              <h3>Invite to Charles</h3>
+              <span className="eyebrow">ADD A TEAM MEMBER</span>
+              <h3>Invite and assign</h3>
             </div>
             <UserPlus size={18} />
           </div>
@@ -597,6 +618,9 @@ function TeamPanel({ isDemo }: { isDemo: boolean }) {
                 placeholder="rep@company.com"
               />
             </label>
+            <label>Role<select name="role" defaultValue="sales_rep"><option value="sales_rep">Sales rep</option><option value="sales_manager">Sales manager</option><option value="support">Support</option></select></label>
+            <label>Reports to<select name="managerUserId" defaultValue=""><option value="">Account owner</option>{members.filter((member) => member.role === "sales_manager" && member.is_active).map((manager) => <option key={String(manager.member_user_id)} value={String(manager.member_user_id)}>{String(manager.display_name ?? manager.email)}</option>)}</select></label>
+            <label>Slack member ID<input name="slackUserId" placeholder="U0123456789 (optional)" /></label>
             <button className="primary-btn" disabled={busy}>
               Send invitation
             </button>
@@ -731,6 +755,12 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
     );
     if (!isDemo) event.currentTarget.reset();
   }
+  async function saveSlack(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    await invoke({ action: "saveSlack", botToken: values.get("botToken"), channel: values.get("channel") }, "Slack connected for rep reminders and escalations.");
+    if (!isDemo) event.currentTarget.reset();
+  }
   async function saveOperatingSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
@@ -747,6 +777,9 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
         crm_wait_minutes: Number(values.get("crm_wait_minutes")),
         eod_link_send_time: values.get("eod_link_send_time"),
         eod_link_template: values.get("eod_link_template"),
+        delivery_channel: values.get("delivery_channel"),
+        command_report_send_time: values.get("command_report_send_time"),
+        disposition_due_minutes: Number(values.get("disposition_due_minutes")),
       },
       "Charles operating instructions saved.",
     );
@@ -770,6 +803,7 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
   const ghl = state.connections?.find((row) => row.provider === "ghl");
   const ai = state.connections?.find((row) => row.provider === "ai");
   const fathom = state.connections?.find((row) => row.provider === "fathom");
+  const slack = state.connections?.find((row) => row.provider === "slack");
   const token = state.webhook?.token ?? "";
   const base = supabaseProjectUrl
     ? `${supabaseProjectUrl}/functions/v1`
@@ -818,6 +852,15 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
                 Disconnect
               </button>
             )}
+          </form>
+        </article>
+        <article className="panel integration-form">
+          <StatusLine icon={<MessageSquareText size={18} />} name="Slack delivery" connected={slack?.status === "connected"} detail={slack ? `${slack.account_name} · channel ${String(slack.metadata?.channel ?? "")}` : "Optional bot delivery for direct rep reminders and owner escalation"} />
+          <form className="form-stack" onSubmit={saveSlack}>
+            <label>Bot token<input required type="password" name="botToken" placeholder="xoxb-..." /></label>
+            <label>Default channel ID<input required name="channel" placeholder="C0123456789" /></label>
+            <button className="primary-btn" disabled={busy}>{slack ? "Update Slack" : "Connect Slack"}</button>
+            {slack && <button type="button" className="danger-link" onClick={() => void invoke({ action: "removeSlack" }, "Slack disconnected.")}>Remove</button>}
           </form>
         </article>
         <article className="panel integration-form">
@@ -982,6 +1025,9 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
                 ).slice(0, 5)}
               />
             </label>
+            <label>Command report time<input name="command_report_send_time" type="time" defaultValue={String(state.settings?.command_report_send_time ?? "17:30").slice(0, 5)} /></label>
+            <label>Disposition due minutes<input name="disposition_due_minutes" type="number" min="1" max="1440" defaultValue={Number(state.settings?.disposition_due_minutes ?? 10)} /></label>
+            <label>Delivery channel<select name="delivery_channel" defaultValue={String(state.settings?.delivery_channel ?? "clickup")}><option value="clickup">ClickUp</option><option value="slack">Slack with ClickUp fallback</option><option value="both">Slack and ClickUp</option></select></label>
           </div>
           <label>
             EOD task template
@@ -1002,7 +1048,7 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
         <div className="panel-head">
           <div>
             <span className="eyebrow">AUTOPILOT</span>
-            <h3>Nine recurring Charles workflows</h3>
+            <h3>Thirteen recurring Charles workflows</h3>
           </div>
           <label className="switch-line">
             <input
@@ -1041,6 +1087,10 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
             "eodEnforce",
             "eodLink",
             "coaching",
+            "appointments",
+            "accountability",
+            "commandReport",
+            "transition",
           ].map((item) => (
             <label key={item}>
               <input
@@ -1062,7 +1112,7 @@ function SalesSettingsPanel({ isDemo }: { isDemo: boolean }) {
         <p>
           Due reminders, CRM exceptions, dropped balls, lead digests, daily
           briefings, EOD links and chasers, morale reports, and weekly coaching
-          are delivered as ClickUp tasks.
+          are delivered through the selected channel. Slack can target a rep directly; ClickUp remains the fallback and durable owner queue.
         </p>
       </article>
       <article className="panel webhook-panel">

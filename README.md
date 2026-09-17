@@ -138,16 +138,16 @@ The Charles workspace keeps each user’s chat history and durable memories. Mes
 The Sales Manager workspace includes every operating area from the original Charles screen:
 
 - **Chat with Charles** uses calls, appointments, opportunities, EOD reports, grading results, playbooks, and durable memory as context. Messages beginning with “remind me” or “remind us” create scheduled reminders for Autopilot delivery.
-- **Responsibilities** controls the master Charles Autopilot switch and each of its nine independent workflows: due-reminder scan, dropped-ball detection, CRM monitoring, lead digest, daily briefing, EOD link delivery, EOD enforcement, morale monitoring, and weekly coaching.
+- **Responsibilities** controls thirteen independent workflows, including appointment-target pacing, immediate/+10/+30/+60 accountability, the Daily Sales Command Report, and won-client transition checklists in addition to the original reminder, CRM, EOD, morale, and coaching jobs.
 - **Instructions & Soul** stores Charles’s operating instructions, personality, timezone, targets, CRM thresholds, EOD time, and ClickUp message template.
-- **GHL Data** syncs and displays appointments and pipeline opportunities from GoHighLevel.
+- **GHL Data** syncs appointments, opportunities, scored contacts, users, calendars, pipelines, and stages from GoHighLevel.
 - **Sales Process**, **The Offer**, and **Industry Knowledge** are private editable operating documents that Charles uses as context.
 - **Call Reporting** combines EOD call activity, conversion movement, AI call quality, and CRM compliance into a seven-day team report.
 - **Call Grading** accepts manual transcripts and displays automatic Fathom/GHL grades, category scores, script adherence, strengths, improvements, and coaching notes.
 - **EOD Report** uses an owner-configurable, sectioned template shared by the signed-in form and private EOD links. Owners can rename, reorder, add, remove, and require questions; the default mirrors the reference project’s activity, pipeline, results, objection, reflection, tomorrow, and CRM sections.
 - **EOD Dashboard / Leaderboard** supports 24-hour, 7-day, 30-day, and 90-day views; category leaders; adjustable weighting; and rankings for closes, revenue, close rate, appointments, call quality, and CRM compliance.
 - **Appointments** syncs GoHighLevel and lets the record owner save booking status, sales outcome, revenue, summary, objections, follow-up time, and next steps.
-- **Integrations** configures ClickUp, GoHighLevel, Fathom, Meta, the AI provider, and tokenized webhook URLs.
+- **Integrations** configures ClickUp, Slack, GoHighLevel, Fathom, Meta, the AI provider, delivery-channel rules, and tokenized webhook URLs. Slack can target a rep by member ID; ClickUp remains the fallback and durable owner queue.
 
 Owner-only data aggregation and rankings run in the `owner-dashboard` Edge Function. Provider credentials stay in Vault and browser tables remain protected by Row Level Security.
 
@@ -161,7 +161,7 @@ Owner-only data aggregation and rankings run in the `owner-dashboard` Edge Funct
 
 Deactivating a rep immediately disables that rep’s magic link and app access to the Sales Manager account.
 
-## Enable the nine Charles schedules
+## Enable the Charles and Media Buyer schedules
 
 After ClickUp and Charles settings are tested:
 
@@ -176,7 +176,7 @@ After ClickUp and Charles settings are tested:
 3. In Operator AI, open **AI Sales Manager > Instructions & Soul** and set the account timezone plus the local delivery times for briefings, lead digests, EOD links, morale, and Friday coaching.
 4. Open **Responsibilities**, enable the desired modes, and then enable the master Charles Autopilot switch.
 
-The nine modes are `scan`, `dropball`, `crm`, `morale`, `leadsdigest`, `briefing`, `eodEnforce`, `eodLink`, and `coaching`. The scheduler calls a service-role-only endpoint; ordinary signed-in users cannot run account-wide jobs. Time-sensitive jobs poll throughout the day, but Charles evaluates each owner's configured IANA timezone and local delivery time before creating a deduplicated ClickUp task.
+The additional modes are `appointments`, `accountability`, `commandReport`, and `transition`. The same SQL installs the hourly Media Buyer monitor. Scheduler endpoints require service-role authorization; ordinary signed-in users cannot run account-wide jobs. Time-sensitive jobs evaluate each owner's configured IANA timezone and deduplicate deliveries.
 
 ## Connect Facebook / Meta Ads Manager
 
@@ -208,6 +208,7 @@ The nine modes are `scan`, `dropball`, `crm`, `morale`, `leadsdigest`, `briefing
 - **Create paused draft** makes a real Meta campaign, ad set, creative, and ad in sequence. Every delivery-capable object is submitted with `PAUSED`; the app has no activate button. Enter a Facebook Page ID, public HTTPS creative image, destination URL, budget, country, and reviewed copy. Partial failures are recorded with every Meta object ID already created so cleanup is auditable.
 - **Account structure** shows campaigns, ad sets, ads, and their seven-day metrics. Ad previews are rendered in a restricted browser frame.
 - **History** stores completed tool results and a separate draft ledger. Any saved result can be sent to the selected ClickUp List as a task.
+- **Autopilot & approvals** stores daily Meta campaign metrics, detects spend/CPL/ROAS/tracking/delivery/creative-fatigue anomalies, maps Meta campaign attribution to GHL contacts and won revenue when campaign IDs are present, and creates a human approval queue. A campaign pause or budget update cannot execute until the owner approves it; all unsupported recommendations remain advisory.
 
 Use a Meta test ad account first. Check the campaign, ad set, creative, destination, pixel/dataset, attribution, Page identity, targeting, budget, special-ad-category requirements, and policy compliance in Ads Manager before manually activating anything.
 
